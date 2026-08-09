@@ -7,7 +7,10 @@ from app.core.exceptions import AppError
 from app.models.coach import CoachAudit, CoachProfile, CoachTag, Service, Tag
 from app.models.user import AdminActionLog, User
 from app.schemas.coach import CoachProfileIn, CoachProfilePatchIn, ServiceIn
+from app.schemas.coach import ServicePatchIn, SlotBatchIn, SlotIn
 from app.utils.time import to_iso, utcnow_naive
+from datetime import date as date_type
+from datetime import datetime
 
 
 def get_profile_by_user(db: Session, user_id: int) -> CoachProfile | None:
@@ -62,6 +65,123 @@ def create_services(db: Session, coach_id: int, services: list[ServiceIn]) -> No
             description=item.description,
             is_enabled=True,
         ))
+
+
+def get_own_service_or_404(db: Session, coach_profile_id: int, service_id: int) -> Service:
+    service = db.scalar(
+        select(Service).where(Service.id == service_id, Service.coach_id == coach_profile_id)
+    )
+    if service is None:
+        raise AppError(404, "SERVICE_INVALID", "服务项目不存在")
+    return service
+
+
+def create_service(db: Session, coach_profile_id: int, data: ServiceIn) -> Service:
+    service = Service(
+        coach_id=coach_profile_id,
+        name=data.name.strip(),
+        service_type=data.service_type,
+        duration_min=data.duration_min,
+        price_in_cents=data.price_in_cents,
+        description=data.description,
+        is_enabled=True,
+    )
+    db.add(service)
+    db.commit()
+    db.refresh(service)
+    return service
+
+
+def update_service(db: Session, coach_profile_id: int, service_id: int, data: ServicePatchIn) -> Service:
+    service = get_own_service_or_404(db, coach_profile_id, service_id)
+    changes = data.model_dump(exclude_unset=True, exclude_none=True)
+    for field in ("name", "service_type", "duration_min", "price_in_cents", "description", "is_enabled"):
+        if field in changes:
+            setattr(service, field, changes[field])
+    db.commit()
+    db.refresh(service)
+    return service
+
+
+def parse_slot_time(value: str):
+    return datetime.strptime(value, "%H:%M").time()
+
+
+def list_coach_slots(db: Session, coach_profile_id: int, start_date: str, end_date: str) -> list:
+    try:
+        start = date_type.fromisoformat(start_date)
+        end = date_type.fromisoformat(end_date)
+    except ValueError:
+        raise AppError(400, "VALIDATION_ERROR", "日期格式应为 YYYY-MM-DD")
+    if end < start:
+        raise AppError(400, "VALIDATION_ERROR", "结束日期不能早于开始日期")
+    from app.models.coach import CoachSlot
+
+    return list(
+        db.scalars(
+            select(CoachSlot)
+            .where(
+                CoachSlot.coach_id == coach_profile_id,
+                CoachSlot.date >= start,
+                CoachSlot.date <= end,
+            )
+            .order_by(CoachSlot.date, CoachSlot.start_time)
+        )
+    )
+
+
+def replace_coach_slots(db: Session, coach_profile_id: int, data: SlotBatchIn) -> list:
+    """按日期范围整体替换可管理时段：删除 AVAILABLE/OFF，保留 BOOKED。"""
+    from app.models.coach import CoachSlot
+
+    today = date_type.today()
+    parsed: list[tuple[date_type, object, object]] = []
+    seen: set[tuple[date_type, object]] = set()
+    for slot in data.slots:
+        d = date_type.fromisoformat(slot.date)
+        start = parse_slot_time(slot.start_time)
+        end = parse_slot_time(slot.end_time)
+        if d < today:
+            raise AppError(400, "VALIDATION_ERROR", "不能设置过去的时段")
+        if end <= start:
+            raise AppError(400, "VALIDATION_ERROR", "结束时间必须晚于开始时间")
+        if (d, start) in seen:
+            raise AppError(400, "SLOT_CONFLICT", "存在重复时段")
+        seen.add((d, start))
+        parsed.append((d, start, end))
+
+    dates = {d for d, _, _ in parsed}
+    db.execute(
+        CoachSlot.__table__.delete().where(
+            CoachSlot.coach_id == coach_profile_id,
+            CoachSlot.date.in_(dates),
+            CoachSlot.status != "BOOKED",
+        )
+    )
+    booked_keys = {
+        (row.date, row.start_time)
+        for row in db.scalars(
+            select(CoachSlot).where(
+                CoachSlot.coach_id == coach_profile_id,
+                CoachSlot.date.in_(dates),
+                CoachSlot.status == "BOOKED",
+            )
+        )
+    }
+    for d, start, end in parsed:
+        if (d, start) in booked_keys:
+            continue
+        db.add(CoachSlot(
+            coach_id=coach_profile_id,
+            date=d,
+            start_time=start,
+            end_time=end,
+            status="AVAILABLE",
+        ))
+    db.commit()
+    return list_coach_slots(
+        db, coach_profile_id, min(dates).isoformat(), max(dates).isoformat()
+    )
 
 
 def build_snapshot(profile: CoachProfile, tags: list[Tag], services: list[Service]) -> dict:

@@ -7,6 +7,7 @@ from app.api.response import ok, paginated
 from app.models.coach import CoachProfile
 from app.models.user import User
 from app.schemas.coach import CoachProfileIn, CoachProfileOut, CoachProfilePatchIn
+from app.schemas.coach import ServiceIn, ServiceOut, ServicePatchIn, SlotBatchIn, SlotOut
 from app.schemas.appointment import (
     AppointmentStatusOut,
     CancelAppointmentIn,
@@ -14,12 +15,18 @@ from app.schemas.appointment import (
 )
 from app.schemas.case import CaseRecordIn, CaseRecordOut, CaseRecordPatchIn, CaseStatsOut
 from app.services.coach_service import (
+    create_service,
     create_profile,
+    get_own_service_or_404,
     get_profile_or_404,
+    list_coach_slots,
     profile_to_out,
+    replace_coach_slots,
     submit_audit,
+    update_service,
     update_profile,
 )
+from app.utils.time import to_iso
 from app.services.appointment_service import (
     cancel_coach_appointment,
     coach_appointment_to_out,
@@ -92,6 +99,129 @@ def resubmit_audit(
         CoachProfileOut(**profile_to_out(db, profile)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
     )
+
+
+# ---------- 服务项目 ----------
+
+
+@router.get("/services")
+def coach_services(
+    request: Request,
+    coach: CoachProfile = Depends(get_current_coach),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.coach_service import get_coach_services
+
+    items = [
+        ServiceOut(**{
+            "id": s.id,
+            "name": s.name,
+            "service_type": s.service_type,
+            "duration_min": s.duration_min,
+            "price_in_cents": s.price_in_cents,
+            "description": s.description,
+            "is_enabled": bool(s.is_enabled),
+        }).model_dump(by_alias=True)
+        for s in get_coach_services(db, coach.id)
+    ]
+    return ok({"items": items}, trace_id=request.state.trace_id)
+
+
+@router.post("/services", status_code=201)
+def coach_create_service(
+    body: ServiceIn,
+    request: Request,
+    coach: CoachProfile = Depends(get_current_coach),
+    db: Session = Depends(get_db),
+) -> dict:
+    service = create_service(db, coach.id, body)
+    return ok(
+        ServiceOut(
+            id=service.id,
+            name=service.name,
+            service_type=service.service_type,
+            duration_min=service.duration_min,
+            price_in_cents=service.price_in_cents,
+            description=service.description,
+            is_enabled=True,
+        ).model_dump(by_alias=True),
+        trace_id=request.state.trace_id,
+    )
+
+
+@router.patch("/services/{service_id}")
+def coach_update_service(
+    service_id: int,
+    body: ServicePatchIn,
+    request: Request,
+    coach: CoachProfile = Depends(get_current_coach),
+    db: Session = Depends(get_db),
+) -> dict:
+    service = update_service(db, coach.id, service_id, body)
+    return ok(
+        ServiceOut(
+            id=service.id,
+            name=service.name,
+            service_type=service.service_type,
+            duration_min=service.duration_min,
+            price_in_cents=service.price_in_cents,
+            description=service.description,
+            is_enabled=bool(service.is_enabled),
+        ).model_dump(by_alias=True),
+        trace_id=request.state.trace_id,
+    )
+
+
+# ---------- 时段设置 ----------
+
+
+@router.get("/slots")
+def coach_slots(
+    request: Request,
+    startDate: str = Query(default="", alias="startDate"),
+    endDate: str = Query(default="", alias="endDate"),
+    coach: CoachProfile = Depends(get_current_coach),
+    db: Session = Depends(get_db),
+) -> dict:
+    from datetime import date, timedelta
+
+    start = startDate or date.today().isoformat()
+    end = endDate or (date.today() + timedelta(days=14)).isoformat()
+    slots = list_coach_slots(db, coach.id, start, end)
+    items = [
+        SlotOut(
+            id=s.id,
+            coach_id=s.coach_id,
+            date=s.date.isoformat(),
+            start_time=s.start_time.strftime("%H:%M"),
+            end_time=s.end_time.strftime("%H:%M"),
+            status=s.status,
+        ).model_dump(by_alias=True)
+        for s in slots
+    ]
+    return ok({"items": items}, trace_id=request.state.trace_id)
+
+
+@router.put("/slots")
+def coach_replace_slots(
+    body: SlotBatchIn,
+    request: Request,
+    coach: CoachProfile = Depends(get_current_coach),
+    db: Session = Depends(get_db),
+) -> dict:
+    slots = replace_coach_slots(db, coach.id, body)
+    items = [
+        SlotOut(
+            id=s.id,
+            coach_id=s.coach_id,
+            date=s.date.isoformat(),
+            start_time=s.start_time.strftime("%H:%M"),
+            end_time=s.end_time.strftime("%H:%M"),
+            status=s.status,
+        ).model_dump(by_alias=True)
+        for s in slots
+    ]
+    return ok({"items": items}, trace_id=request.state.trace_id)
 
 
 # ---------- 预约管理 ----------

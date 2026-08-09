@@ -242,3 +242,72 @@ def test_unauthorized_coach_access(client):
         assert resp.json()["code"] == "COACH_NOT_APPROVED"
     finally:
         delete_user_by_phone(phone)
+
+
+def test_public_tags(client):
+    resp = client.get("/api/v1/tags")
+    assert resp.status_code == 200
+    names = [t["name"] for t in resp.json()["data"]["items"]]
+    assert "考前焦虑" in names
+    assert "家长" in names
+
+
+def test_coach_services_and_slots_management(client, coach_env):
+    headers = coach_env["coach_headers"]
+
+    resp = client.post(
+        "/api/v1/coach/services",
+        headers=headers,
+        json={"name": "考试心态课", "serviceType": "SINGLE", "durationMin": 90, "priceInCents": 19900},
+    )
+    assert resp.status_code == 201
+    service_id = resp.json()["data"]["id"]
+
+    resp = client.patch(
+        f"/api/v1/coach/services/{service_id}",
+        headers=headers,
+        json={"isEnabled": False},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["isEnabled"] is False
+
+    resp = client.get("/api/v1/coach/services", headers=headers)
+    assert any(s["id"] == service_id for s in resp.json()["data"]["items"])
+
+    from datetime import date, timedelta
+
+    d1 = (date.today() + timedelta(days=2)).isoformat()
+    d2 = (date.today() + timedelta(days=3)).isoformat()
+    resp = client.put(
+        "/api/v1/coach/slots",
+        headers=headers,
+        json={
+            "slots": [
+                {"date": d1, "startTime": "09:00", "endTime": "10:00"},
+                {"date": d1, "startTime": "11:00", "endTime": "12:00"},
+                {"date": d2, "startTime": "09:00", "endTime": "10:00"},
+            ]
+        },
+    )
+    assert resp.status_code == 200
+    assert len(resp.json()["data"]["items"]) >= 3
+
+    resp = client.put(
+        "/api/v1/coach/slots",
+        headers=headers,
+        json={
+            "slots": [
+                {"date": d1, "startTime": "09:00", "endTime": "10:00"},
+                {"date": d1, "startTime": "09:00", "endTime": "10:00"},
+            ]
+        },
+    )
+    assert resp.status_code == 400
+
+    past = (date.today() - timedelta(days=1)).isoformat()
+    resp = client.put(
+        "/api/v1/coach/slots",
+        headers=headers,
+        json={"slots": [{"date": past, "startTime": "09:00", "endTime": "10:00"}]},
+    )
+    assert resp.status_code == 400

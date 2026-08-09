@@ -16,6 +16,7 @@ from app.api.v1 import (
     emotion_journals,
     home,
     self_coaching,
+    tags,
     users,
 )
 from app.core.config import cors_origin_list, settings
@@ -97,6 +98,7 @@ app.include_router(coach.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(appointments.router, prefix="/api/v1")
 app.include_router(coaches.router, prefix="/api/v1")
+app.include_router(tags.router, prefix="/api/v1")
 app.include_router(articles.articles_router, prefix="/api/v1")
 app.include_router(articles.categories_router, prefix="/api/v1")
 app.include_router(admin.users_router, prefix="/api/v1")

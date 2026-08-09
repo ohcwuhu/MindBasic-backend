@@ -16,7 +16,9 @@ client = TestClient(app)
 
 ADMIN_PHONE = "13800138000"
 ADMIN_PASSWORD = "Admin@123456"
-TEST_PHONE = "13900001111"
+
+def unique_phone() -> str:
+    return "139" + str(int(time.time() * 1000) % 100000000).zfill(8)
 
 
 def unique_phone() -> str:
@@ -73,10 +75,11 @@ def test_refresh_rotation():
 
 
 def test_register_flow_and_duplicate():
+    phone = unique_phone()
     resp = client.post(
         "/api/v1/auth/register",
         json={
-            "phone": TEST_PHONE,
+            "phone": phone,
             "password": "Test123456",
             "nickname": "测试用户",
             "privacyAgreed": True,
@@ -88,7 +91,7 @@ def test_register_flow_and_duplicate():
     resp = client.post(
         "/api/v1/auth/register",
         json={
-            "phone": TEST_PHONE,
+            "phone": phone,
             "password": "Test123456",
             "nickname": "测试用户",
             "privacyAgreed": True,
@@ -96,6 +99,7 @@ def test_register_flow_and_duplicate():
     )
     assert resp.status_code == 409
     assert resp.json()["code"] == "PHONE_EXISTS"
+    delete_user_by_phone(phone)
 
 
 def test_error_cases():

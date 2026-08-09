@@ -3,7 +3,7 @@ from datetime import timedelta
 import pytest
 
 from app.db.session import SessionLocal
-from app.models.content import Article
+from app.models.content import Article, ArticleCategory
 from app.utils.time import utcnow_naive
 
 
@@ -13,11 +13,15 @@ def articles(client):
     objs = []
     try:
         base = utcnow_naive()
+        category = ArticleCategory(name="测试文章分类", sort_order=99, is_enabled=True)
+        db.add(category)
+        db.commit()
+        db.refresh(category)
         a1 = Article(
             title="考前心态调整三招",
             summary="考前焦虑的实用方法",
             content="<p>正文：呼吸练习与正面自我对话</p>",
-            category_id=1,
+            category_id=category.id,
             is_pinned=True,
             status="PUBLISHED",
             view_count=0,
@@ -27,7 +31,7 @@ def articles(client):
             title="一位教练的真实故事",
             summary="教练如何陪伴考生家庭",
             content="<p>教练故事正文</p>",
-            category_id=2,
+            category_id=category.id,
             status="PUBLISHED",
             view_count=0,
             published_at=base + timedelta(seconds=1),
@@ -36,7 +40,7 @@ def articles(client):
             title="为什么孩子越来越不爱说话",
             summary="亲子沟通常见困惑",
             content="<p>困惑与资源视角</p>",
-            category_id=3,
+            category_id=category.id,
             status="PUBLISHED",
             view_count=0,
             published_at=base + timedelta(seconds=2),
@@ -47,13 +51,14 @@ def articles(client):
         for obj in (a1, a2, a3, draft):
             db.refresh(obj)
         objs = [a1, a2, a3, draft]
-        yield {"a1": a1.id, "a2": a2.id, "a3": a3.id, "draft": draft.id}
+        yield {"a1": a1.id, "a2": a2.id, "a3": a3.id, "draft": draft.id, "category": category.id}
     finally:
         if objs:
             db = SessionLocal()
             try:
                 for obj in objs:
                     db.delete(db.get(Article, obj.id))
+                db.delete(db.get(ArticleCategory, category.id))
                 db.commit()
             finally:
                 db.close()
@@ -72,14 +77,14 @@ def test_article_list_and_filter(client, articles):
     resp = client.get("/api/v1/articles?page=1&pageSize=10")
     assert resp.status_code == 200
     data = resp.json()["data"]
-    assert data["pagination"]["totalItems"] == 3
-    assert data["items"][0]["title"] == "考前心态调整三招"  # 置顶优先
+    assert data["pagination"]["totalItems"] >= 3
+    assert data["items"][0]["isPinned"] is True  # 置顶优先
 
-    resp = client.get("/api/v1/articles?categoryId=2")
+    resp = client.get(f"/api/v1/articles?categoryId={articles['category']}")
     ids = [a["id"] for a in resp.json()["data"]["items"]]
-    assert ids == [articles["a2"]]
+    assert set(ids) == {articles["a1"], articles["a2"], articles["a3"]}
 
-    resp = client.get("/api/v1/articles?keyword=孩子")
+    resp = client.get("/api/v1/articles?keyword=考前心态调整")
     assert resp.json()["data"]["pagination"]["totalItems"] == 1
 
 

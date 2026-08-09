@@ -13,6 +13,34 @@ class ServiceIn(ApiModel):
     description: str | None = Field(default=None, max_length=500)
 
 
+class ServicePatchIn(ApiModel):
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    service_type: Literal["SINGLE", "PACKAGE"] | None = None
+    duration_min: int | None = Field(default=None, ge=15, le=480)
+    price_in_cents: int | None = Field(default=None, gt=0)
+    description: str | None = Field(default=None, max_length=500)
+    is_enabled: bool | None = None
+
+
+class SlotIn(ApiModel):
+    date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    start_time: str = Field(pattern=r"^\d{2}:\d{2}$")
+    end_time: str = Field(pattern=r"^\d{2}:\d{2}$")
+
+
+class SlotBatchIn(ApiModel):
+    slots: list[SlotIn] = Field(default_factory=list, min_length=1)
+
+
+class SlotOut(ApiModel):
+    id: int
+    coach_id: int
+    date: str
+    start_time: str
+    end_time: str
+    status: Literal["AVAILABLE", "BOOKED", "OFF"]
+
+
 class CoachProfileIn(ApiModel):
     real_name: str = Field(min_length=1, max_length=32)
     bio: str | None = Field(default=None, max_length=2000)
