@@ -15,13 +15,9 @@ from app.core.security import (
 )
 from app.models.user import RefreshToken, User
 from app.schemas.auth import UserOut
+from app.utils.time import utcnow_naive
 
 REFRESH_COOKIE = "refresh_token"
-
-
-def utcnow_naive() -> datetime:
-    """MySQL DATETIME 无时区，统一返回 naive UTC，避免 aware/naive 比较错误。"""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def mask_phone(phone: str) -> str:

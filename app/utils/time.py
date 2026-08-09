@@ -1,6 +1,11 @@
-"""时间序列化工具。"""
+"""时间工具。"""
 
-from datetime import datetime
+from datetime import datetime, timezone
+
+
+def utcnow_naive() -> datetime:
+    """MySQL DATETIME 无时区，统一返回 naive UTC。"""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def to_iso(dt: datetime | None) -> str | None:
