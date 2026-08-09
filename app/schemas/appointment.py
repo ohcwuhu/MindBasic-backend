@@ -48,6 +48,7 @@ class AppointmentOut(ApiModel):
     status: Literal["PENDING", "CONFIRMED", "COMPLETED", "CANCELLED"]
     cancel_reason: str | None = None
     can_cancel: bool
+    reviewed: bool
     created_at: str
 
 

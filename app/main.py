@@ -17,6 +17,7 @@ from app.api.v1 import (
     emotion_journals,
     files,
     home,
+    notifications,
     self_coaching,
     tags,
     users,
@@ -104,6 +105,7 @@ app.include_router(coaches.router, prefix="/api/v1")
 app.include_router(tags.router, prefix="/api/v1")
 app.include_router(files.router, prefix="/api/v1")
 app.include_router(checkins.router, prefix="/api/v1")
+app.include_router(notifications.router, prefix="/api/v1")
 app.include_router(articles.articles_router, prefix="/api/v1")
 app.include_router(articles.categories_router, prefix="/api/v1")
 app.include_router(admin.users_router, prefix="/api/v1")

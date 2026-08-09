@@ -15,6 +15,7 @@ from app.models.coach import (
 )
 from app.models.user import AdminActionLog, User
 from app.models.v1_1 import ClientRelation
+from app.services.notification_service import notify
 from app.schemas.coach import CoachProfileIn, CoachProfilePatchIn, ServiceIn
 from app.schemas.coach import ServicePatchIn, SlotBatchIn, SlotIn
 from app.utils.time import to_iso, utcnow_naive
@@ -533,6 +534,15 @@ def approve_audit(db: Session, admin: User, audit_id: int) -> CoachAudit:
         .where(CoachProfile.id == audit.coach_id)
         .values(audit_status="APPROVED")
     )
+    profile = db.get(CoachProfile, audit.coach_id)
+    if profile is not None:
+        notify(
+            db,
+            profile.user_id,
+            "AUDIT",
+            "入驻审核通过",
+            "你的教练入驻申请已通过，现在可以使用教练工作台了。",
+        )
     db.add(AdminActionLog(
         admin_id=admin.id,
         action="COACH_AUDIT_APPROVE",
@@ -560,6 +570,15 @@ def reject_audit(db: Session, admin: User, audit_id: int, reason: str) -> CoachA
         .where(CoachProfile.id == audit.coach_id)
         .values(audit_status="REJECTED")
     )
+    profile = db.get(CoachProfile, audit.coach_id)
+    if profile is not None:
+        notify(
+            db,
+            profile.user_id,
+            "AUDIT",
+            "入驻审核被驳回",
+            f"驳回原因：{reason}",
+        )
     db.add(AdminActionLog(
         admin_id=admin.id,
         action="COACH_AUDIT_REJECT",

@@ -111,6 +111,10 @@ def env(client, admin_headers):
 
 def test_review_flow(client, env):
     headers = env["user_headers"]
+    mine = client.get("/api/v1/appointments/mine?page=1&pageSize=20", headers=headers).json()["data"]["items"]
+    target = next(a for a in mine if a["id"] == env["appointment_id"])
+    assert target["reviewed"] is False
+
     resp = client.post(
         f"/api/v1/appointments/{env['appointment_id']}/review",
         headers=headers,
@@ -131,6 +135,24 @@ def test_review_flow(client, env):
 
     resp = client.get(f"/api/v1/appointments/{env['appointment_id']}/review", headers=headers)
     assert resp.status_code == 200
+
+    mine = client.get("/api/v1/appointments/mine?page=1&pageSize=20", headers=headers).json()["data"]["items"]
+    target = next(a for a in mine if a["id"] == env["appointment_id"])
+    assert target["reviewed"] is True
+
+
+def test_notifications(client, env):
+    coach_count = client.get("/api/v1/notifications/unread-count", headers=env["coach_headers"]).json()["data"]["count"]
+    assert coach_count >= 1
+
+    user_count = client.get("/api/v1/notifications/unread-count", headers=env["user_headers"]).json()["data"]["count"]
+    assert user_count >= 1
+
+    resp = client.post("/api/v1/notifications/read-all", headers=env["user_headers"])
+    assert resp.status_code == 200
+    assert resp.json()["data"]["marked"] >= 1
+    count = client.get("/api/v1/notifications/unread-count", headers=env["user_headers"]).json()["data"]["count"]
+    assert count == 0
 
 
 def test_checkin_and_badges(client, auth_headers):

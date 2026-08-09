@@ -19,6 +19,7 @@ from app.models.coach import Appointment, CoachProfile, CoachSlot, CoachTag, Ser
 from app.models.content import Article, Banner
 from app.models.user import User
 from app.models.v1_1 import ClientRelation, Review
+from app.services.notification_service import notify
 from app.utils.time import utcnow_naive
 
 
@@ -32,6 +33,10 @@ def main() -> None:
         for phone in ("13900000001", "13900000002"):
             user = db.scalar(select(User).where(User.phone == phone))
             if user is not None:
+                db.execute(Appointment.__table__.delete().where(Appointment.user_id == user.id))
+                profile = db.scalar(select(CoachProfile).where(CoachProfile.user_id == user.id))
+                if profile is not None:
+                    db.execute(Appointment.__table__.delete().where(Appointment.coach_id == profile.id))
                 db.delete(user)
         db.commit()
 
@@ -185,6 +190,8 @@ def main() -> None:
             last_appointment_at=pending_review.completed_at,
             remark="备考家庭，重点关注考前心态",
         ))
+        notify(db, small_user.id, "APPOINTMENT", "预约已确认", "林老师已确认你的预约，请按约定时间联系。")
+        notify(db, coach_user.id, "AUDIT", "入驻审核通过", "你的教练入驻申请已通过，现在可以使用教练工作台了。")
         profile.rating = 4.7
         profile.review_count = 3
 
