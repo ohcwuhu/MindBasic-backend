@@ -46,6 +46,24 @@ def get_current_user(
     return user
 
 
+def get_optional_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+) -> User | None:
+    """可选登录态：带有效 Token 返回用户，否则返回 None（不抛错）。"""
+    if credentials is None:
+        return None
+    try:
+        payload = decode_access_token(credentials.credentials)
+        user_id = int(payload["sub"])
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError, KeyError, TypeError, ValueError):
+        return None
+    user = db.get(User, user_id)
+    if user is None or user.deleted_at is not None or user.status != "ENABLED":
+        return None
+    return user
+
+
 def require_role(*roles: str):
     """返回一个依赖：要求当前用户属于指定角色。"""
 
