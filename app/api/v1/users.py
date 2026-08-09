@@ -7,8 +7,10 @@ from app.api.response import ok, paginated
 from app.models.user import User
 from app.schemas.auth import ChangePasswordIn, UserPatchIn
 from app.schemas.article import ArticleListOut
+from app.schemas.checkin import BadgeOut
 from app.services.article_service import article_to_out, list_my_favorites
 from app.services.auth_service import to_user_out
+from app.services.checkin_service import my_badges
 from app.services.auth_service import change_password, deactivate_account
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -68,3 +70,13 @@ def deactivate_me(
 ) -> dict:
     deactivate_account(db, user)
     return ok({"message": "账号已注销"}, trace_id=request.state.trace_id)
+
+
+@router.get("/me/badges")
+def my_badges_endpoint(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    items = [BadgeOut(**b).model_dump(by_alias=True) for b in my_badges(db, user.id)]
+    return ok({"items": items}, trace_id=request.state.trace_id)

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import AppError
 from app.models.coach import Appointment, CoachProfile, CoachSlot, Service
 from app.models.user import User
+from app.models.v1_1 import ClientRelation
 from app.schemas.appointment import AppointmentCreateIn
 from app.utils.time import to_iso, utcnow_naive
 
@@ -272,6 +273,20 @@ def complete_appointment(db: Session, coach_profile_id: int, appointment_id: int
         raise AppError(409, "INVALID_STATE_TRANSITION", "仅已确认预约可标记完成")
     appointment.status = "COMPLETED"
     appointment.completed_at = utcnow_naive()
+    relation = db.scalar(
+        select(ClientRelation).where(
+            ClientRelation.coach_id == coach_profile_id,
+            ClientRelation.user_id == appointment.user_id,
+        )
+    )
+    if relation is not None:
+        relation.last_appointment_at = appointment.completed_at
+    else:
+        db.add(ClientRelation(
+            coach_id=coach_profile_id,
+            user_id=appointment.user_id,
+            last_appointment_at=appointment.completed_at,
+        ))
     db.commit()
     db.refresh(appointment)
     return appointment

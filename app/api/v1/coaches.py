@@ -11,6 +11,8 @@ from app.api.response import ok, paginated
 from app.core.exceptions import AppError
 from app.models.coach import CoachProfile, CoachSlot, CoachTag, Service, Tag
 from app.models.user import User
+from app.schemas.review import ReviewOut
+from app.services.review_service import coach_reviews, review_to_out
 from app.utils.time import to_iso
 
 router = APIRouter(prefix="/coaches", tags=["coaches"])
@@ -141,3 +143,17 @@ def coach_slots(coach_id: int, request: Request, db: Session = Depends(get_db)) 
         for s in slots
     ]
     return ok({"items": items}, trace_id=request.state.trace_id)
+
+
+@router.get("/{coach_id}/reviews")
+def coach_reviews_endpoint(
+    coach_id: int,
+    request: Request,
+    page: int = Query(default=1, ge=1),
+    pageSize: int = Query(default=10, ge=1, le=50, alias="pageSize"),
+    db: Session = Depends(get_db),
+) -> dict:
+    get_approved_coach_or_404(db, coach_id)
+    rows, total = coach_reviews(db, coach_id, page, pageSize)
+    items = [ReviewOut(**review_to_out(review, user.nickname)).model_dump(by_alias=True) for review, user in rows]
+    return ok(paginated(items, total, page, pageSize), trace_id=request.state.trace_id)

@@ -4,8 +4,17 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import AppError
-from app.models.coach import CoachAudit, CoachProfile, CoachTag, Service, Tag
+from app.models.coach import (
+    CoachAudit,
+    CoachPhrase,
+    CoachProfile,
+    CoachTag,
+    PlatformPhrase,
+    Service,
+    Tag,
+)
 from app.models.user import AdminActionLog, User
+from app.models.v1_1 import ClientRelation
 from app.schemas.coach import CoachProfileIn, CoachProfilePatchIn, ServiceIn
 from app.schemas.coach import ServicePatchIn, SlotBatchIn, SlotIn
 from app.utils.time import to_iso, utcnow_naive
@@ -182,6 +191,138 @@ def replace_coach_slots(db: Session, coach_profile_id: int, data: SlotBatchIn) -
     return list_coach_slots(
         db, coach_profile_id, min(dates).isoformat(), max(dates).isoformat()
     )
+
+
+# ---------- 客户管理 ----------
+
+
+def list_clients(
+    db: Session, coach_profile_id: int, keyword: str | None, page: int, page_size: int
+) -> tuple[list[tuple[ClientRelation, User]], int]:
+    stmt = (
+        select(ClientRelation, User)
+        .join(User, User.id == ClientRelation.user_id)
+        .where(ClientRelation.coach_id == coach_profile_id)
+    )
+    if keyword:
+        stmt = stmt.where(User.nickname.like(f"%{keyword}%"))
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    rows = db.execute(
+        stmt.order_by(ClientRelation.last_appointment_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    return rows, total
+
+
+def update_client_remark(
+    db: Session, coach_profile_id: int, relation_id: int, remark: str | None
+) -> ClientRelation:
+    relation = db.scalar(
+        select(ClientRelation).where(
+            ClientRelation.id == relation_id,
+            ClientRelation.coach_id == coach_profile_id,
+        )
+    )
+    if relation is None:
+        raise AppError(404, "NOT_FOUND", "客户记录不存在")
+    relation.remark = remark
+    db.commit()
+    db.refresh(relation)
+    return relation
+
+
+# ---------- 话术库 ----------
+
+
+def list_platform_phrases(db: Session, category: str | None) -> list[PlatformPhrase]:
+    stmt = (
+        select(PlatformPhrase)
+        .where(PlatformPhrase.is_enabled.is_(True))
+        .order_by(PlatformPhrase.category, PlatformPhrase.sort_order)
+    )
+    if category:
+        stmt = stmt.where(PlatformPhrase.category == category)
+    return list(db.scalars(stmt))
+
+
+def my_phrases(db: Session, coach_profile_id: int) -> list[CoachPhrase]:
+    return list(
+        db.scalars(
+            select(CoachPhrase)
+            .where(CoachPhrase.coach_id == coach_profile_id)
+            .order_by(CoachPhrase.updated_at.desc())
+        )
+    )
+
+
+def get_own_phrase_or_404(db: Session, coach_profile_id: int, phrase_id: int) -> CoachPhrase:
+    phrase = db.scalar(
+        select(CoachPhrase).where(
+            CoachPhrase.id == phrase_id,
+            CoachPhrase.coach_id == coach_profile_id,
+        )
+    )
+    if phrase is None:
+        raise AppError(404, "NOT_FOUND", "话术不存在")
+    return phrase
+
+
+def create_phrase(db: Session, coach_profile_id: int, category: str, content: str) -> CoachPhrase:
+    phrase = CoachPhrase(
+        coach_id=coach_profile_id,
+        category=category,
+        content=content.strip(),
+        source="custom",
+    )
+    db.add(phrase)
+    db.commit()
+    db.refresh(phrase)
+    return phrase
+
+
+def update_phrase(
+    db: Session, coach_profile_id: int, phrase_id: int, category: str | None, content: str | None
+) -> CoachPhrase:
+    phrase = get_own_phrase_or_404(db, coach_profile_id, phrase_id)
+    if category:
+        phrase.category = category
+    if content:
+        phrase.content = content.strip()
+    db.commit()
+    db.refresh(phrase)
+    return phrase
+
+
+def delete_phrase(db: Session, coach_profile_id: int, phrase_id: int) -> None:
+    phrase = get_own_phrase_or_404(db, coach_profile_id, phrase_id)
+    db.delete(phrase)
+    db.commit()
+
+
+def save_platform_phrase(db: Session, coach_profile_id: int, phrase_id: int) -> CoachPhrase:
+    platform = db.get(PlatformPhrase, phrase_id)
+    if platform is None or not platform.is_enabled:
+        raise AppError(404, "NOT_FOUND", "平台话术不存在")
+    duplicate = db.scalar(
+        select(CoachPhrase.id).where(
+            CoachPhrase.coach_id == coach_profile_id,
+            CoachPhrase.content == platform.content,
+            CoachPhrase.source == "saved",
+        )
+    )
+    if duplicate is not None:
+        raise AppError(409, "CONFLICT", "已收藏该话术")
+    phrase = CoachPhrase(
+        coach_id=coach_profile_id,
+        category=platform.category,
+        content=platform.content,
+        source="saved",
+    )
+    db.add(phrase)
+    db.commit()
+    db.refresh(phrase)
+    return phrase
 
 
 def build_snapshot(profile: CoachProfile, tags: list[Tag], services: list[Service]) -> dict:

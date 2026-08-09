@@ -41,6 +41,41 @@ class SlotOut(ApiModel):
     status: Literal["AVAILABLE", "BOOKED", "OFF"]
 
 
+class ClientOut(ApiModel):
+    id: int
+    user_id: int
+    nickname: str
+    phone: str
+    last_appointment_at: str | None = None
+    remark: str | None = None
+
+
+class ClientPatchIn(ApiModel):
+    remark: str | None = Field(default=None, max_length=255)
+
+
+class PhraseIn(ApiModel):
+    category: Literal["OPENING", "RESOURCE", "FUTURE", "ACTION", "OTHER"]
+    content: str = Field(min_length=1, max_length=500)
+
+
+class PhrasePatchIn(ApiModel):
+    category: Literal["OPENING", "RESOURCE", "FUTURE", "ACTION", "OTHER"] | None = None
+    content: str | None = Field(default=None, min_length=1, max_length=500)
+
+
+class PhraseOut(ApiModel):
+    id: int
+    category: str
+    content: str
+    source: str
+    created_at: str
+
+
+class SavePhraseIn(ApiModel):
+    phrase_id: int
+
+
 class CoachProfileIn(ApiModel):
     real_name: str = Field(min_length=1, max_length=32)
     bio: str | None = Field(default=None, max_length=2000)

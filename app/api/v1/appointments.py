@@ -5,12 +5,14 @@ from app.api.deps import get_current_user, get_db
 from app.api.response import ok, paginated
 from app.models.user import User
 from app.schemas.appointment import AppointmentCreateIn, AppointmentOut
+from app.schemas.review import ReviewIn, ReviewOut
 from app.services.appointment_service import (
     cancel_my_appointment,
     create_appointment,
     get_appointment_ctx,
     list_my_appointments,
 )
+from app.services.review_service import create_review, get_my_review, review_to_out
 
 router = APIRouter(prefix="/appointments", tags=["appointments"])
 
@@ -59,5 +61,38 @@ def cancel_appointment(
     appointment = cancel_my_appointment(db, user, appointment_id)
     return ok(
         AppointmentOut(**get_appointment_ctx(db, appointment)).model_dump(by_alias=True),
+        trace_id=request.state.trace_id,
+    )
+
+
+@router.post("/{appointment_id}/review", status_code=201)
+def review_appointment(
+    appointment_id: int,
+    body: ReviewIn,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    review = create_review(db, user, appointment_id, body.rating, body.content)
+    return ok(
+        ReviewOut(**review_to_out(review, user.nickname)).model_dump(by_alias=True),
+        trace_id=request.state.trace_id,
+    )
+
+
+@router.get("/{appointment_id}/review")
+def my_appointment_review(
+    appointment_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    review = get_my_review(db, user.id, appointment_id)
+    if review is None:
+        from app.core.exceptions import AppError
+
+        raise AppError(404, "NOT_FOUND", "还没有评价")
+    return ok(
+        ReviewOut(**review_to_out(review, user.nickname)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
     )

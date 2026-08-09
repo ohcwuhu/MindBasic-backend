@@ -302,3 +302,46 @@ class CaseRecord(Base):
         server_default=text("CURRENT_TIMESTAMP(3)"),
         onupdate=text("CURRENT_TIMESTAMP(3)"),
     )
+
+
+class CoachPhrase(Base):
+    """教练话术库（自定义与收藏的平台话术）。"""
+
+    __tablename__ = "coach_phrases"
+    __table_args__ = (
+        Index("idx_coach_phrases_coach", "coach_id"),
+        CheckConstraint(
+            "category IN ('OPENING','RESOURCE','FUTURE','ACTION','OTHER')",
+            name="chk_coach_phrases_category",
+        ),
+    )
+
+    id = Column(BIGINT(unsigned=True), primary_key=True, autoincrement=True)
+    coach_id = Column(
+        BIGINT(unsigned=True),
+        ForeignKey("coach_profiles.id", ondelete="CASCADE", name="fk_coach_phrases_coach"),
+        nullable=False,
+    )
+    category = Column(String(16), nullable=False, comment="OPENING/RESOURCE/FUTURE/ACTION/OTHER")
+    content = Column(String(500), nullable=False)
+    source = Column(String(16), nullable=False, server_default="custom", comment="custom/saved")
+    created_at = Column(DATETIME(fsp=3), nullable=False, server_default=text("CURRENT_TIMESTAMP(3)"))
+    updated_at = Column(
+        DATETIME(fsp=3),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3)"),
+        onupdate=text("CURRENT_TIMESTAMP(3)"),
+    )
+
+
+class PlatformPhrase(Base):
+    """平台内置话术库。"""
+
+    __tablename__ = "platform_phrases"
+
+    id = Column(BIGINT(unsigned=True), primary_key=True, autoincrement=True)
+    category = Column(String(16), nullable=False)
+    content = Column(String(500), nullable=False)
+    sort_order = Column(INTEGER, nullable=False, server_default=text("0"))
+    is_enabled = Column(Boolean, nullable=False, server_default=text("1"))
+    created_at = Column(DATETIME(fsp=3), nullable=False, server_default=text("CURRENT_TIMESTAMP(3)"))

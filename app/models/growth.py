@@ -2,6 +2,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Column,
+    Date,
     ForeignKey,
     Index,
     Integer,
@@ -37,6 +38,64 @@ class CoachingTemplate(Base):
         server_default=text("CURRENT_TIMESTAMP(3)"),
         onupdate=text("CURRENT_TIMESTAMP(3)"),
     )
+
+
+class CheckIn(Base):
+    """每日小行动打卡。"""
+
+    __tablename__ = "check_ins"
+    __table_args__ = (
+        UniqueConstraint("user_id", "check_date", name="uq_check_ins_user_date"),
+        Index("idx_check_ins_date", "check_date"),
+    )
+
+    id = Column(BIGINT(unsigned=True), primary_key=True, autoincrement=True)
+    user_id = Column(
+        BIGINT(unsigned=True),
+        ForeignKey("users.id", ondelete="CASCADE", name="fk_check_ins_user"),
+        nullable=False,
+    )
+    check_date = Column(Date, nullable=False)
+    content = Column(String(200), nullable=True, comment="今日小行动")
+    created_at = Column(DATETIME(fsp=3), nullable=False, server_default=text("CURRENT_TIMESTAMP(3)"))
+
+
+class Badge(Base):
+    """勋章定义。"""
+
+    __tablename__ = "badges"
+    __table_args__ = (
+        UniqueConstraint("key", name="uq_badges_key"),
+    )
+
+    id = Column(BIGINT(unsigned=True), primary_key=True, autoincrement=True)
+    key = Column(String(32), nullable=False)
+    name = Column(String(32), nullable=False)
+    description = Column(String(200), nullable=False)
+    icon = Column(String(64), nullable=True)
+    sort_order = Column(Integer, nullable=False, server_default=text("0"))
+
+
+class UserBadge(Base):
+    """用户已获得勋章。"""
+
+    __tablename__ = "user_badges"
+    __table_args__ = (
+        UniqueConstraint("user_id", "badge_id", name="uq_user_badges"),
+    )
+
+    id = Column(BIGINT(unsigned=True), primary_key=True, autoincrement=True)
+    user_id = Column(
+        BIGINT(unsigned=True),
+        ForeignKey("users.id", ondelete="CASCADE", name="fk_user_badges_user"),
+        nullable=False,
+    )
+    badge_id = Column(
+        BIGINT(unsigned=True),
+        ForeignKey("badges.id", ondelete="CASCADE", name="fk_user_badges_badge"),
+        nullable=False,
+    )
+    earned_at = Column(DATETIME(fsp=3), nullable=False, server_default=text("CURRENT_TIMESTAMP(3)"))
 
 
 class TemplateStep(Base):

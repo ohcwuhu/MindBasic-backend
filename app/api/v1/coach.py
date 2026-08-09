@@ -7,7 +7,19 @@ from app.api.response import ok, paginated
 from app.models.coach import CoachProfile
 from app.models.user import User
 from app.schemas.coach import CoachProfileIn, CoachProfileOut, CoachProfilePatchIn
-from app.schemas.coach import ServiceIn, ServiceOut, ServicePatchIn, SlotBatchIn, SlotOut
+from app.schemas.coach import (
+    ClientOut,
+    ClientPatchIn,
+    PhraseIn,
+    PhraseOut,
+    PhrasePatchIn,
+    SavePhraseIn,
+    ServiceIn,
+    ServiceOut,
+    ServicePatchIn,
+    SlotBatchIn,
+    SlotOut,
+)
 from app.schemas.appointment import (
     AppointmentStatusOut,
     CancelAppointmentIn,
@@ -17,12 +29,21 @@ from app.schemas.case import CaseRecordIn, CaseRecordOut, CaseRecordPatchIn, Cas
 from app.services.coach_service import (
     create_service,
     create_profile,
+    create_phrase,
+    delete_phrase,
     get_own_service_or_404,
+    get_own_phrase_or_404,
     get_profile_or_404,
+    list_clients,
     list_coach_slots,
+    list_platform_phrases,
+    my_phrases,
     profile_to_out,
     replace_coach_slots,
+    save_platform_phrase,
     submit_audit,
+    update_client_remark,
+    update_phrase,
     update_service,
     update_profile,
 )
@@ -220,6 +241,157 @@ def coach_replace_slots(
             status=s.status,
         ).model_dump(by_alias=True)
         for s in slots
+    ]
+    return ok({"items": items}, trace_id=request.state.trace_id)
+
+
+# ---------- 客户管理 ----------
+
+
+@router.get("/clients")
+def coach_clients(
+    request: Request,
+    keyword: str | None = Query(default=None, max_length=32),
+    page: int = Query(default=1, ge=1),
+    pageSize: int = Query(default=10, ge=1, le=50, alias="pageSize"),
+    coach: CoachProfile = Depends(get_current_coach),
+    db: Session = Depends(get_db),
+) -> dict:
+    rows, total = list_clients(db, coach.id, keyword, page, pageSize)
+    from app.services.auth_service import mask_phone
+
+    items = [
+        ClientOut(
+            id=relation.id,
+            user_id=user.id,
+            nickname=user.nickname,
+            phone=mask_phone(user.phone),
+            last_appointment_at=to_iso(relation.last_appointment_at),
+            remark=relation.remark,
+        ).model_dump(by_alias=True)
+        for relation, user in rows
+    ]
+    return ok({"items": items, "pagination": {"page": page, "pageSize": pageSize, "totalItems": total, "totalPages": max(1, (total + pageSize - 1) // pageSize), "hasMore": page * pageSize < total}}, trace_id=request.state.trace_id)
+
+
+@router.patch("/clients/{relation_id}")
+def coach_update_client(
+    relation_id: int,
+    body: ClientPatchIn,
+    request: Request,
+    coach: CoachProfile = Depends(get_current_coach),
+    db: Session = Depends(get_db),
+) -> dict:
+    relation = update_client_remark(db, coach.id, relation_id, body.remark)
+    return ok({"id": relation.id, "remark": relation.remark}, trace_id=request.state.trace_id)
+
+
+# ---------- 话术库 ----------
+
+
+@router.get("/phrases")
+def coach_phrases_endpoint(
+    request: Request,
+    coach: CoachProfile = Depends(get_current_coach),
+    db: Session = Depends(get_db),
+) -> dict:
+    items = [
+        PhraseOut(
+            id=p.id,
+            category=p.category,
+            content=p.content,
+            source=p.source,
+            created_at=to_iso(p.created_at),
+        ).model_dump(by_alias=True)
+        for p in my_phrases(db, coach.id)
+    ]
+    return ok({"items": items}, trace_id=request.state.trace_id)
+
+
+@router.post("/phrases", status_code=201)
+def coach_create_phrase_endpoint(
+    body: PhraseIn,
+    request: Request,
+    coach: CoachProfile = Depends(get_current_coach),
+    db: Session = Depends(get_db),
+) -> dict:
+    phrase = create_phrase(db, coach.id, body.category, body.content)
+    return ok(
+        PhraseOut(
+            id=phrase.id,
+            category=phrase.category,
+            content=phrase.content,
+            source=phrase.source,
+            created_at=to_iso(phrase.created_at),
+        ).model_dump(by_alias=True),
+        trace_id=request.state.trace_id,
+    )
+
+
+@router.post("/phrases/save", status_code=201)
+def coach_save_phrase(
+    body: SavePhraseIn,
+    request: Request,
+    coach: CoachProfile = Depends(get_current_coach),
+    db: Session = Depends(get_db),
+) -> dict:
+    phrase = save_platform_phrase(db, coach.id, body.phrase_id)
+    return ok(
+        PhraseOut(
+            id=phrase.id,
+            category=phrase.category,
+            content=phrase.content,
+            source=phrase.source,
+            created_at=to_iso(phrase.created_at),
+        ).model_dump(by_alias=True),
+        trace_id=request.state.trace_id,
+    )
+
+
+@router.patch("/phrases/{phrase_id}")
+def coach_update_phrase_endpoint(
+    phrase_id: int,
+    body: PhrasePatchIn,
+    request: Request,
+    coach: CoachProfile = Depends(get_current_coach),
+    db: Session = Depends(get_db),
+) -> dict:
+    phrase = update_phrase(db, coach.id, phrase_id, body.category, body.content)
+    return ok(
+        PhraseOut(
+            id=phrase.id,
+            category=phrase.category,
+            content=phrase.content,
+            source=phrase.source,
+            created_at=to_iso(phrase.created_at),
+        ).model_dump(by_alias=True),
+        trace_id=request.state.trace_id,
+    )
+
+
+@router.delete("/phrases/{phrase_id}", status_code=204)
+def coach_delete_phrase_endpoint(
+    phrase_id: int,
+    request: Request,
+    coach: CoachProfile = Depends(get_current_coach),
+    db: Session = Depends(get_db),
+) -> None:
+    delete_phrase(db, coach.id, phrase_id)
+
+
+phrase_library_router = APIRouter(prefix="/phrase-library", tags=["phrase-library"])
+
+
+@phrase_library_router.get("")
+def platform_phrases_endpoint(
+    request: Request,
+    category: str | None = Query(default=None, pattern="^(OPENING|RESOURCE|FUTURE|ACTION|OTHER)$"),
+    coach: CoachProfile = Depends(get_current_coach),
+    db: Session = Depends(get_db),
+) -> dict:
+    items = [
+        {"id": p.id, "category": p.category, "content": p.content}
+        for p in list_platform_phrases(db, category)
     ]
     return ok({"items": items}, trace_id=request.state.trace_id)
 

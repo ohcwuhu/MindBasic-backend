@@ -13,6 +13,7 @@ from app.api.v1 import (
     auth,
     coach,
     coaches,
+    checkins,
     emotion_journals,
     files,
     home,
@@ -96,11 +97,13 @@ app.include_router(self_coaching.router, prefix="/api/v1")
 app.include_router(emotion_journals.router, prefix="/api/v1")
 app.include_router(home.router, prefix="/api/v1")
 app.include_router(coach.router, prefix="/api/v1")
+app.include_router(coach.phrase_library_router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(appointments.router, prefix="/api/v1")
 app.include_router(coaches.router, prefix="/api/v1")
 app.include_router(tags.router, prefix="/api/v1")
 app.include_router(files.router, prefix="/api/v1")
+app.include_router(checkins.router, prefix="/api/v1")
 app.include_router(articles.articles_router, prefix="/api/v1")
 app.include_router(articles.categories_router, prefix="/api/v1")
 app.include_router(admin.users_router, prefix="/api/v1")
