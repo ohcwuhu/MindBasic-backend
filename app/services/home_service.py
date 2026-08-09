@@ -6,9 +6,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.coach import CoachProfile, CoachTag, Tag
-from app.models.content import Article, ArticleFavorite, Banner
+from app.models.content import Article, Banner
 from app.models.user import User
-from app.utils.time import to_iso
+from app.services.article_service import article_to_out, get_favorite_ids
 
 QUICK_ENTRIES = [
     {"key": "self_coaching", "title": "自我教练", "icon": "self-coaching", "path": "/self-coaching"},
@@ -83,27 +83,3 @@ def get_recommended_coaches(db: Session, limit: int = 3) -> list[dict]:
         for c in coaches
     ]
 
-
-def article_to_out(article: Article, favorite_ids: set[int] | None = None) -> dict:
-    return {
-        "id": article.id,
-        "title": article.title,
-        "summary": article.summary,
-        "cover_url": article.cover_url,
-        "category_id": article.category_id,
-        "is_pinned": bool(article.is_pinned),
-        "is_favorite": article.id in (favorite_ids or set()),
-        "published_at": to_iso(article.published_at),
-    }
-
-
-def get_favorite_ids(db: Session, user_id: int, article_ids: list[int]) -> set[int]:
-    if not article_ids:
-        return set()
-    rows = db.scalars(
-        select(ArticleFavorite.article_id).where(
-            ArticleFavorite.user_id == user_id,
-            ArticleFavorite.article_id.in_(article_ids),
-        )
-    )
-    return set(rows)

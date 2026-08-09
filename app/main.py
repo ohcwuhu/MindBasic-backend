@@ -6,7 +6,17 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.v1 import admin, appointments, auth, coach, emotion_journals, home, self_coaching, users
+from app.api.v1 import (
+    admin,
+    appointments,
+    articles,
+    auth,
+    coach,
+    emotion_journals,
+    home,
+    self_coaching,
+    users,
+)
 from app.core.config import cors_origin_list, settings
 from app.core.exceptions import AppError
 
@@ -85,6 +95,8 @@ app.include_router(home.router, prefix="/api/v1")
 app.include_router(coach.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(appointments.router, prefix="/api/v1")
+app.include_router(articles.articles_router, prefix="/api/v1")
+app.include_router(articles.categories_router, prefix="/api/v1")
 
 
 @app.get("/health", tags=["system"])

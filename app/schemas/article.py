@@ -12,3 +12,8 @@ class ArticleListOut(ApiModel):
     is_pinned: bool = False
     is_favorite: bool = False
     published_at: str | None = None
+
+
+class ArticleDetailOut(ArticleListOut):
+    content: str
+    view_count: int
