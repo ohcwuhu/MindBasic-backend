@@ -15,9 +15,10 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
 
 from app.db.session import SessionLocal
-from app.models.coach import CoachProfile, CoachSlot, CoachTag, Service
+from app.models.coach import Appointment, CoachProfile, CoachSlot, CoachTag, Service
 from app.models.content import Article, Banner
 from app.models.user import User
+from app.models.v1_1 import ClientRelation, Review
 from app.utils.time import utcnow_naive
 
 
@@ -112,16 +113,80 @@ def main() -> None:
             )
 
         # 演示普通用户
-        db.add(
-            User(
-                phone="13900000002",
-                password_hash=bcrypt.hashpw(b"Demo123456", bcrypt.gensalt()).decode(),
-                nickname="小满",
-                role="USER",
-                status="ENABLED",
-                privacy_agreed=True,
+        small_user = User(
+            phone="13900000002",
+            password_hash=bcrypt.hashpw(b"Demo123456", bcrypt.gensalt()).decode(),
+            nickname="小满",
+            role="USER",
+            status="ENABLED",
+            privacy_agreed=True,
+        )
+        db.add(small_user)
+        db.flush()
+
+        # 演示已完成预约 + 客户档案 + 评价（3 条已评价 + 1 条待评价）
+        service = db.scalar(
+            select(Service).where(Service.coach_id == profile.id).order_by(Service.id).limit(1)
+        )
+        slots_for_booking = list(
+            db.scalars(
+                select(CoachSlot)
+                .where(CoachSlot.coach_id == profile.id)
+                .order_by(CoachSlot.date)
+                .limit(4)
             )
         )
+        review_data = [
+            (5, "老师很耐心，陪我把焦虑梳理成了具体的行动，孩子也愿意和我聊了。"),
+            (5, "没有说教，一直在引导我自己找到答案，收获很大。"),
+            (4, "氛围很放松，建议也很落地，期待下一次。"),
+        ]
+        latest = None
+        for i, (slot, (rating, content)) in enumerate(zip(slots_for_booking[:3], review_data)):
+            slot.status = "BOOKED"
+            appointment = Appointment(
+                appointment_no=f"APDEMO000{i + 1}",
+                user_id=small_user.id,
+                coach_id=profile.id,
+                service_id=service.id,
+                slot_id=slot.id,
+                need_desc="希望学会考前如何稳定心态，也想了解怎么和孩子沟通。",
+                status="COMPLETED",
+                completed_at=utcnow_naive() - timedelta(days=3 - i),
+            )
+            db.add(appointment)
+            db.flush()
+            db.add(Review(
+                appointment_id=appointment.id,
+                coach_id=profile.id,
+                user_id=small_user.id,
+                rating=rating,
+                content=content,
+            ))
+            latest = appointment
+        # 一条已完成但未评价的预约，方便体验评价流程
+        pending_review_slot = slots_for_booking[3]
+        pending_review_slot.status = "BOOKED"
+        pending_review = Appointment(
+            appointment_no="APDEMO0004",
+            user_id=small_user.id,
+            coach_id=profile.id,
+            service_id=service.id,
+            slot_id=pending_review_slot.id,
+            need_desc="想聊聊职场压力和职业方向。",
+            status="COMPLETED",
+            completed_at=utcnow_naive() - timedelta(days=1),
+        )
+        db.add(pending_review)
+        db.flush()
+        db.add(ClientRelation(
+            coach_id=profile.id,
+            user_id=small_user.id,
+            last_appointment_at=pending_review.completed_at,
+            remark="备考家庭，重点关注考前心态",
+        ))
+        profile.rating = 4.7
+        profile.review_count = 3
 
         # 演示文章
         base = utcnow_naive()
@@ -191,7 +256,7 @@ def main() -> None:
             ]
         )
         db.commit()
-        print("demo data refreshed: coach 林老师 / user 小满 / 3 articles / 2 banners")
+        print("demo data refreshed: coach 林老师 / user 小满 / 3 reviews / 1 completed appointment / 3 articles / 2 banners")
     finally:
         db.close()
 
