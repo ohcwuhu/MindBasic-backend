@@ -97,6 +97,13 @@ app.include_router(admin.router, prefix="/api/v1")
 app.include_router(appointments.router, prefix="/api/v1")
 app.include_router(articles.articles_router, prefix="/api/v1")
 app.include_router(articles.categories_router, prefix="/api/v1")
+app.include_router(admin.users_router, prefix="/api/v1")
+app.include_router(admin.articles_router, prefix="/api/v1")
+app.include_router(admin.categories_router, prefix="/api/v1")
+app.include_router(admin.banners_router, prefix="/api/v1")
+app.include_router(admin.tags_router, prefix="/api/v1")
+app.include_router(admin.feedback_router, prefix="/api/v1")
+app.include_router(admin.stats_router, prefix="/api/v1")
 
 
 @app.get("/health", tags=["system"])
