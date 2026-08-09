@@ -1,12 +1,10 @@
 import logging
 import uuid
-from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 
 from app.api.v1 import (
     admin,
@@ -26,11 +24,8 @@ from app.core.config import cors_origin_list, settings
 from app.core.exceptions import AppError
 
 logger = logging.getLogger("mindbasic")
-UPLOAD_DIR = Path(__file__).resolve().parents[1] / "uploads"
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title=settings.app_name, debug=settings.debug)
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
 app.add_middleware(
     CORSMiddleware,

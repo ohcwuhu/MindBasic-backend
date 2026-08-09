@@ -4,11 +4,14 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi.responses import FileResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import get_current_user, get_db, get_optional_user
 from app.api.response import ok
 from app.core.exceptions import AppError
+from app.models.file import FileUpload
 from app.models.user import User
 
 UPLOAD_DIR = Path(__file__).resolve().parents[3] / "uploads"
@@ -42,14 +45,49 @@ async def upload_file(
     if not data:
         raise AppError(400, "FILE_TYPE_INVALID", "文件内容为空")
 
+    original_name = (file.filename or "file").replace("\\", "/").split("/")[-1][:255]
     filename = f"{uuid.uuid4().hex}{ALLOWED_TYPES[content_type]}"
     (UPLOAD_DIR / filename).write_bytes(data)
     is_private = usage == "idcard"
+    record = FileUpload(
+        file_id=filename,
+        user_id=user.id,
+        usage=usage,
+        is_private=is_private,
+        original_name=original_name,
+        content_type=content_type,
+        size=len(data),
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
     return ok(
         {
-            "fileId": filename,
-            "url": f"/uploads/{filename}",
+            "fileId": record.file_id,
+            "url": f"/api/v1/files/{record.file_id}/content",
             "isPrivate": is_private,
+            "originalName": record.original_name,
         },
         trace_id=request.state.trace_id,
     )
+
+
+@router.get("/{file_id}/content")
+def download_file(
+    file_id: str,
+    request: Request,
+    user: User | None = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    record = db.scalar(select(FileUpload).where(FileUpload.file_id == file_id))
+    if record is None:
+        raise AppError(404, "NOT_FOUND", "文件不存在")
+    if record.is_private:
+        if user is None:
+            raise AppError(401, "UNAUTHORIZED", "请先登录")
+        if record.user_id != user.id and user.role != "ADMIN":
+            raise AppError(403, "FORBIDDEN", "无权访问该文件")
+    path = UPLOAD_DIR / record.file_id
+    if path.name != record.file_id or not path.is_file():
+        raise AppError(404, "NOT_FOUND", "文件不存在")
+    return FileResponse(path, media_type=record.content_type)
