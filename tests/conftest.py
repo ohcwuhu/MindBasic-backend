@@ -9,6 +9,15 @@ from app.main import app
 from app.models.user import User
 
 
+@pytest.fixture(autouse=True)
+def reset_rate_limits():
+    from app.core.rate_limit import reset_rate_limits
+
+    reset_rate_limits()
+    yield
+    reset_rate_limits()
+
+
 def unique_phone() -> str:
     return "139" + str(int(time.time() * 1000) % 100000000).zfill(8)
 

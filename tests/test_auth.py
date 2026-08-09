@@ -250,3 +250,18 @@ def test_change_password_and_deactivate():
             db.commit()
     finally:
         db.close()
+
+
+def test_login_rate_limit():
+    for _ in range(10):
+        resp = client.post(
+            "/api/v1/auth/login",
+            json={"phone": "13900000002", "password": "wrongpass"},
+        )
+        assert resp.status_code == 401
+    resp = client.post(
+        "/api/v1/auth/login",
+        json={"phone": "13900000002", "password": "wrongpass"},
+    )
+    assert resp.status_code == 429
+    assert resp.json()["code"] == "RATE_LIMITED"

@@ -5,6 +5,7 @@ from app.api.deps import get_db
 from app.api.response import ok
 from app.core.config import settings
 from app.core.exceptions import AppError
+from app.core.rate_limit import rate_limit
 from app.core.security import create_access_token
 from app.schemas.auth import AuthOut, LoginIn, RegisterIn, TokenOut
 from app.services.auth_service import (
@@ -50,6 +51,7 @@ def register(
     request: Request,
     response: Response,
     db: Session = Depends(get_db),
+    _limiter: None = Depends(rate_limit("register", 5, 60)),
 ) -> dict:
     user = register_user(db, body.phone, body.password, body.nickname, body.privacy_agreed)
     access_token, expires_in = create_access_token(user.id, user.role)
@@ -65,6 +67,7 @@ def login(
     request: Request,
     response: Response,
     db: Session = Depends(get_db),
+    _limiter: None = Depends(rate_limit("login", 10, 60)),
 ) -> dict:
     user = authenticate_user(db, body.phone, body.password)
     user.last_login_at = utcnow_naive()
@@ -77,7 +80,12 @@ def login(
 
 
 @router.post("/refresh")
-def refresh(request: Request, response: Response, db: Session = Depends(get_db)) -> dict:
+def refresh(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+    _limiter: None = Depends(rate_limit("refresh", 20, 60)),
+) -> dict:
     raw_token = get_refresh_token(request)
     new_token, user = rotate_refresh_token(db, raw_token)
     access_token, expires_in = create_access_token(user.id, user.role)
