@@ -12,6 +12,7 @@ from app.api.v1 import (
     articles,
     auth,
     coach,
+    coaches,
     emotion_journals,
     home,
     self_coaching,
@@ -95,6 +96,7 @@ app.include_router(home.router, prefix="/api/v1")
 app.include_router(coach.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
 app.include_router(appointments.router, prefix="/api/v1")
+app.include_router(coaches.router, prefix="/api/v1")
 app.include_router(articles.articles_router, prefix="/api/v1")
 app.include_router(articles.categories_router, prefix="/api/v1")
 app.include_router(admin.users_router, prefix="/api/v1")
