@@ -43,3 +43,8 @@ class TokenOut(ApiModel):
 class UserPatchIn(ApiModel):
     nickname: str | None = Field(default=None, min_length=1, max_length=20)
     avatarUrl: str | None = Field(default=None, max_length=512)
+
+
+class ChangePasswordIn(ApiModel):
+    old_password: str = Field(min_length=1, max_length=64)
+    new_password: str = Field(min_length=8, max_length=64)

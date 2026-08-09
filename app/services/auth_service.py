@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -112,3 +112,29 @@ def revoke_refresh_token(db: Session, raw_token: str) -> None:
     if record is not None and record.revoked_at is None:
         record.revoked_at = utcnow_naive()
         db.commit()
+
+
+def change_password(db: Session, user: User, old_password: str, new_password: str) -> None:
+    if not verify_password(old_password, user.password_hash):
+        raise AppError(401, "CREDENTIAL_INVALID", "原密码错误")
+    user.password_hash = hash_password(new_password)
+    now = utcnow_naive()
+    db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.user_id == user.id, RefreshToken.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    db.commit()
+
+
+def deactivate_account(db: Session, user: User) -> None:
+    """注销账号：软删除 + 释放手机号 + 吊销全部刷新令牌。"""
+    user.deleted_at = utcnow_naive()
+    user.phone = f"del_{user.id}"
+    now = utcnow_naive()
+    db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.user_id == user.id, RefreshToken.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    db.commit()

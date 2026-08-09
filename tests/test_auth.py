@@ -199,3 +199,54 @@ def test_register_requires_privacy_agreement():
     )
     assert resp.status_code == 400
     assert resp.json()["code"] == "VALIDATION_ERROR"
+
+
+def test_change_password_and_deactivate():
+    phone = unique_phone()
+    reg = client.post(
+        "/api/v1/auth/register",
+        json={"phone": phone, "password": "OldPass123", "nickname": "资料测试", "privacyAgreed": True},
+    )
+    assert reg.status_code == 201
+    user_id = reg.json()["data"]["user"]["id"]
+    token = reg.json()["data"]["accessToken"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 原密码错误
+    resp = client.post(
+        "/api/v1/users/me/password",
+        headers=headers,
+        json={"oldPassword": "Wrong123", "newPassword": "NewPass123"},
+    )
+    assert resp.status_code == 401
+    assert resp.json()["code"] == "CREDENTIAL_INVALID"
+
+    # 修改成功
+    resp = client.post(
+        "/api/v1/users/me/password",
+        headers=headers,
+        json={"oldPassword": "OldPass123", "newPassword": "NewPass123"},
+    )
+    assert resp.status_code == 200
+    assert client.post("/api/v1/auth/login", json={"phone": phone, "password": "OldPass123"}).status_code == 401
+    assert client.post("/api/v1/auth/login", json={"phone": phone, "password": "NewPass123"}).status_code == 200
+
+    # 注销后不可登录，手机号被释放可重新注册
+    resp = client.post("/api/v1/users/me/deactivate", headers=headers)
+    assert resp.status_code == 200
+    assert client.post("/api/v1/auth/login", json={"phone": phone, "password": "NewPass123"}).status_code == 401
+    resp = client.post(
+        "/api/v1/auth/register",
+        json={"phone": phone, "password": "NewPass123", "nickname": "再来", "privacyAgreed": True},
+    )
+    assert resp.status_code == 201
+
+    delete_user_by_phone(phone)
+    db = SessionLocal()
+    try:
+        deleted = db.scalar(select(User).where(User.phone == f"del_{user_id}"))
+        if deleted is not None:
+            db.delete(deleted)
+            db.commit()
+    finally:
+        db.close()
