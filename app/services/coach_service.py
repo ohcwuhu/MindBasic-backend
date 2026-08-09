@@ -335,6 +335,8 @@ def profile_to_out(db: Session, profile: CoachProfile) -> dict:
             }
             for s in services
         ],
+        "credential_urls": profile.credential_urls or [],
+        "id_card_url": profile.id_card_url,
         "audit_status": profile.audit_status,
         "audit_remark": latest.remark if latest else None,
         "rating": float(profile.rating),

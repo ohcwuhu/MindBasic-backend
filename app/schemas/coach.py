@@ -90,6 +90,8 @@ class CoachProfileOut(ApiModel):
     years_of_experience: int
     tags: list[TagOut] = []
     services: list[ServiceOut] = []
+    credential_urls: list[str] = []
+    id_card_url: str | None = None
     audit_status: Literal["PENDING", "APPROVED", "REJECTED"]
     audit_remark: str | None = None
     rating: float = 0.0

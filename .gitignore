@@ -6,3 +6,4 @@ __pycache__/
 .coverage
 uvicorn*.log
 *.err.log
+uploads/
