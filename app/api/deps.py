@@ -3,11 +3,13 @@
 import jwt
 from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import AppError
 from app.core.security import decode_access_token
 from app.db.session import SessionLocal
+from app.models.coach import CoachProfile
 from app.models.user import User
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -62,6 +64,17 @@ def get_optional_user(
     if user is None or user.deleted_at is not None or user.status != "ENABLED":
         return None
     return user
+
+
+def get_current_coach(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CoachProfile:
+    """要求当前用户是已审核通过的教练，返回其教练资料。"""
+    profile = db.scalar(select(CoachProfile).where(CoachProfile.user_id == user.id))
+    if profile is None or profile.audit_status != "APPROVED":
+        raise AppError(403, "COACH_NOT_APPROVED", "请先完成教练入驻并通过审核")
+    return profile
 
 
 def require_role(*roles: str):

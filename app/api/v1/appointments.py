@@ -1,0 +1,63 @@
+from fastapi import APIRouter, Depends, Header, Query, Request
+from sqlalchemy.orm import Session
+
+from app.api.deps import get_current_user, get_db
+from app.api.response import ok, paginated
+from app.models.user import User
+from app.schemas.appointment import AppointmentCreateIn, AppointmentOut
+from app.services.appointment_service import (
+    cancel_my_appointment,
+    create_appointment,
+    get_appointment_ctx,
+    list_my_appointments,
+)
+
+router = APIRouter(prefix="/appointments", tags=["appointments"])
+
+
+@router.post("", status_code=201)
+def book_appointment(
+    body: AppointmentCreateIn,
+    request: Request,
+    idempotencyKey: str | None = Header(default=None, max_length=36, alias="Idempotency-Key"),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    appointment, created = create_appointment(db, user, body, idempotencyKey)
+    payload = AppointmentOut(**get_appointment_ctx(db, appointment)).model_dump(by_alias=True)
+    if not created:
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(
+            status_code=200,
+            content={"code": "OK", "message": "success", "data": payload, "traceId": request.state.trace_id},
+        )
+    return ok(payload, trace_id=request.state.trace_id)
+
+
+@router.get("/mine")
+def my_appointments(
+    request: Request,
+    status: str | None = Query(default=None, pattern="^(PENDING|CONFIRMED|COMPLETED|CANCELLED)$"),
+    page: int = Query(default=1, ge=1),
+    pageSize: int = Query(default=10, ge=1, le=50, alias="pageSize"),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    rows, total = list_my_appointments(db, user.id, status, page, pageSize)
+    items = [AppointmentOut(**get_appointment_ctx(db, a)).model_dump(by_alias=True) for a in rows]
+    return ok(paginated(items, total, page, pageSize), trace_id=request.state.trace_id)
+
+
+@router.post("/{appointment_id}/cancel")
+def cancel_appointment(
+    appointment_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    appointment = cancel_my_appointment(db, user, appointment_id)
+    return ok(
+        AppointmentOut(**get_appointment_ctx(db, appointment)).model_dump(by_alias=True),
+        trace_id=request.state.trace_id,
+    )

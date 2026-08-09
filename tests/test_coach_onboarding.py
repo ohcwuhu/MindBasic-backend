@@ -7,16 +7,6 @@ from app.db.session import SessionLocal
 from app.models.user import User
 
 
-@pytest.fixture(scope="module")
-def admin_headers(client):
-    resp = client.post(
-        "/api/v1/auth/login",
-        json={"phone": "13800138000", "password": "Admin@123456"},
-    )
-    assert resp.status_code == 200
-    return {"Authorization": f"Bearer {resp.json()['data']['accessToken']}"}
-
-
 def second_coach_headers(client):
     phone = "138" + str(int(time.time() * 1000) % 100000000).zfill(8)
     resp = client.post(

@@ -37,3 +37,13 @@ def auth_headers(client):
             db.commit()
     finally:
         db.close()
+
+
+@pytest.fixture(scope="module")
+def admin_headers(client):
+    resp = client.post(
+        "/api/v1/auth/login",
+        json={"phone": "13800138000", "password": "Admin@123456"},
+    )
+    assert resp.status_code == 200
+    return {"Authorization": f"Bearer {resp.json()['data']['accessToken']}"}
