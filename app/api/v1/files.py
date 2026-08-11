@@ -47,7 +47,8 @@ async def upload_file(
 
     original_name = (file.filename or "file").replace("\\", "/").split("/")[-1][:255]
     filename = f"{uuid.uuid4().hex}{ALLOWED_TYPES[content_type]}"
-    (UPLOAD_DIR / filename).write_bytes(data)
+    path = UPLOAD_DIR / filename
+    path.write_bytes(data)
     is_private = usage == "idcard"
     record = FileUpload(
         file_id=filename,
@@ -59,8 +60,14 @@ async def upload_file(
         size=len(data),
     )
     db.add(record)
-    db.commit()
-    db.refresh(record)
+    try:
+        db.commit()
+        db.refresh(record)
+    except Exception:
+        # 入库失败时清理已写盘的文件，避免孤儿文件
+        path.unlink(missing_ok=True)
+        db.rollback()
+        raise
     return ok(
         {
             "fileId": record.file_id,

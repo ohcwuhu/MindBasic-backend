@@ -99,3 +99,33 @@ def test_public_general_file(client, auth_headers):
     url = resp.json()["data"]["url"]
     resp = client.get(url)
     assert resp.status_code == 200
+
+
+def test_upload_cleans_file_when_db_fails(client, auth_headers, monkeypatch):
+    from fastapi.testclient import TestClient
+    from sqlalchemy.orm import Session
+
+    from app.main import app
+    from app.api.v1.files import UPLOAD_DIR
+
+    before = {p.name for p in UPLOAD_DIR.glob("*.png")}
+    real_commit = Session.commit
+    calls = {"n": 0}
+
+    def failing_commit(self):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("db down")
+        return real_commit(self)
+
+    monkeypatch.setattr(Session, "commit", failing_commit)
+    quiet_client = TestClient(app, raise_server_exceptions=False)
+    resp = quiet_client.post(
+        "/api/v1/files",
+        headers=auth_headers,
+        files={"file": ("orphan.png", PNG_BYTES, "image/png")},
+        data={"usage": "credential"},
+    )
+    assert resp.status_code == 500
+    after = {p.name for p in UPLOAD_DIR.glob("*.png")}
+    assert after == before
