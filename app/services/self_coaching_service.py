@@ -1,36 +1,36 @@
 """自我教练业务逻辑。"""
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppError
 from app.models.growth import CoachingTemplate, SelfCoachingRecord, TemplateStep
 from app.utils.time import to_iso
 
 
-def get_template_or_404(db: Session, template_id: int) -> CoachingTemplate:
-    template = db.get(CoachingTemplate, template_id)
+async def get_template_or_404(db: AsyncSession, template_id: int) -> CoachingTemplate:
+    template = await db.get(CoachingTemplate, template_id)
     if template is None or not template.is_enabled:
         raise AppError(404, "TEMPLATE_NOT_FOUND", "自我教练模板不存在")
     return template
 
 
-def list_templates(db: Session) -> list[CoachingTemplate]:
+async def list_templates(db: AsyncSession) -> list[CoachingTemplate]:
     stmt = (
         select(CoachingTemplate)
         .where(CoachingTemplate.is_enabled.is_(True))
         .order_by(CoachingTemplate.sort_order)
     )
-    return list(db.scalars(stmt))
+    return list(await db.scalars(stmt))
 
 
-def list_steps(db: Session, template_id: int) -> list[TemplateStep]:
+async def list_steps(db: AsyncSession, template_id: int) -> list[TemplateStep]:
     stmt = (
         select(TemplateStep)
         .where(TemplateStep.template_id == template_id)
         .order_by(TemplateStep.sort_order)
     )
-    return list(db.scalars(stmt))
+    return list(await db.scalars(stmt))
 
 
 def validate_answers(template: CoachingTemplate, steps: list[TemplateStep], answers: dict[str, str]) -> dict[str, str]:
@@ -64,8 +64,8 @@ def build_action_card(template: CoachingTemplate, steps: list[TemplateStep], ans
     }
 
 
-def get_own_record_or_404(db: Session, user_id: int, record_id: int) -> SelfCoachingRecord:
-    record = db.scalar(
+async def get_own_record_or_404(db: AsyncSession, user_id: int, record_id: int) -> SelfCoachingRecord:
+    record = await db.scalar(
         select(SelfCoachingRecord).where(
             SelfCoachingRecord.id == record_id,
             SelfCoachingRecord.user_id == user_id,
@@ -88,8 +88,8 @@ def record_to_out(record: SelfCoachingRecord) -> dict:
     }
 
 
-def count_records(db: Session, user_id: int, status: str | None) -> int:
+async def count_records(db: AsyncSession, user_id: int, status: str | None) -> int:
     stmt = select(func.count()).select_from(SelfCoachingRecord).where(SelfCoachingRecord.user_id == user_id)
     if status:
         stmt = stmt.where(SelfCoachingRecord.status == status)
-    return db.scalar(stmt) or 0
+    return await db.scalar(stmt) or 0

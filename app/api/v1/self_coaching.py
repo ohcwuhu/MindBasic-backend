@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import get_async_db, get_current_user
 from app.api.response import ok, paginated
 from app.core.exceptions import AppError
 from app.models.growth import CoachingTemplate, SelfCoachingRecord
@@ -47,36 +47,36 @@ def template_to_out(template: CoachingTemplate, steps) -> dict:
 
 
 @router.get("/templates")
-def get_templates(
+async def get_templates(
     request: Request,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    templates = list_templates(db)
-    items = [template_to_out(t, list_steps(db, t.id)) for t in templates]
+    templates = await list_templates(db)
+    items = [template_to_out(t, await list_steps(db, t.id)) for t in templates]
     return ok({"items": items}, trace_id=request.state.trace_id)
 
 
 @router.get("/templates/{template_id}")
-def get_template(
+async def get_template(
     template_id: int,
     request: Request,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    template = get_template_or_404(db, template_id)
-    return ok(template_to_out(template, list_steps(db, template.id)), trace_id=request.state.trace_id)
+    template = await get_template_or_404(db, template_id)
+    return ok(template_to_out(template, await list_steps(db, template.id)), trace_id=request.state.trace_id)
 
 
 @router.post("/records", status_code=201)
-def create_record(
+async def create_record(
     body: SelfCoachingRecordIn,
     request: Request,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    template = get_template_or_404(db, body.template_id)
-    steps = list_steps(db, template.id)
+    template = await get_template_or_404(db, body.template_id)
+    steps = await list_steps(db, template.id)
     answers = validate_answers(template, steps, body.answers)
     action_card = None
     if body.status == "COMPLETED":
@@ -90,8 +90,8 @@ def create_record(
         status=body.status,
     )
     db.add(record)
-    db.commit()
-    db.refresh(record)
+    await db.commit()
+    await db.refresh(record)
     return ok(
         SelfCoachingRecordOut(**record_to_out(record)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
@@ -99,16 +99,16 @@ def create_record(
 
 
 @router.patch("/records/{record_id}")
-def patch_record(
+async def patch_record(
     record_id: int,
     body: SelfCoachingRecordPatchIn,
     request: Request,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    record = get_own_record_or_404(db, user.id, record_id)
-    template = get_template_or_404(db, record.template_id)
-    steps = list_steps(db, template.id)
+    record = await get_own_record_or_404(db, user.id, record_id)
+    template = await get_template_or_404(db, record.template_id)
+    steps = await list_steps(db, template.id)
 
     answers = dict(record.answers)
     if body.answers is not None:
@@ -126,8 +126,8 @@ def patch_record(
 
     record.answers = answers
     record.status = new_status
-    db.commit()
-    db.refresh(record)
+    await db.commit()
+    await db.refresh(record)
     return ok(
         SelfCoachingRecordOut(**record_to_out(record)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
@@ -135,13 +135,13 @@ def patch_record(
 
 
 @router.get("/records")
-def list_records(
+async def list_records(
     request: Request,
     status: str | None = Query(default=None, pattern="^(DRAFT|COMPLETED)$"),
     page: int = Query(default=1, ge=1),
     pageSize: int = Query(default=10, ge=1, le=50, alias="pageSize"),
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
     stmt = (
         select(SelfCoachingRecord, CoachingTemplate.name)
@@ -155,7 +155,7 @@ def list_records(
         .offset((page - 1) * pageSize)
         .limit(pageSize)
     )
-    rows = db.execute(stmt).all()
+    rows = (await db.execute(stmt)).all()
     items = [
         SelfCoachingRecordListOut(
             id=record.id,
@@ -167,18 +167,18 @@ def list_records(
         ).model_dump(by_alias=True)
         for record, template_name in rows
     ]
-    total = count_records(db, user.id, status)
+    total = await count_records(db, user.id, status)
     return ok(paginated(items, total, page, pageSize), trace_id=request.state.trace_id)
 
 
 @router.get("/records/{record_id}")
-def get_record(
+async def get_record(
     record_id: int,
     request: Request,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    record = get_own_record_or_404(db, user.id, record_id)
+    record = await get_own_record_or_404(db, user.id, record_id)
     return ok(
         SelfCoachingRecordOut(**record_to_out(record)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
