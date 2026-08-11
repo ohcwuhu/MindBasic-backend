@@ -4,12 +4,13 @@ import jwt
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import AppError
 from app.core.security import decode_access_token
 from app.core.token_blacklist import is_blacklisted
-from app.db.session import SessionLocal
+from app.db.session import AsyncSessionLocal, SessionLocal
 from app.models.coach import CoachProfile
 from app.models.user import User
 
@@ -22,6 +23,15 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+async def get_async_db():
+    """异步会话依赖：给已迁移为 async 的路由使用。"""
+    db = AsyncSessionLocal()
+    try:
+        yield db
+    finally:
+        await db.close()
 
 
 def get_current_user(
