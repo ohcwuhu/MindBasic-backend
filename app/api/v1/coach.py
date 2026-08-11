@@ -63,7 +63,7 @@ from app.services.appointment_service import (
 from app.services.case_record_service import (
     case_stats,
     case_to_out,
-    cases_to_csv,
+    cases_to_markdown,
     create_case,
     delete_case,
     get_own_case_or_404,
@@ -468,10 +468,10 @@ async def coach_cases_export(
     db: AsyncSession = Depends(get_async_db),
 ) -> Response:
     records = await list_all_cases(db, coach.id)
-    filename = f"个案记录_{datetime.now().strftime('%Y%m%d')}.csv"
+    filename = f"个案记录_{datetime.now().strftime('%Y%m%d')}.md"
     return Response(
-        content=cases_to_csv(records),
-        media_type="text/csv; charset=utf-8",
+        content=cases_to_markdown(records),
+        media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
     )
 

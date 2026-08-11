@@ -207,12 +207,14 @@ def test_case_records_flow(client, coach_env):
 
     resp = client.get("/api/v1/coach/cases/export", headers=coach_env["coach_headers"])
     assert resp.status_code == 200
-    assert "text/csv" in resp.headers["content-type"]
-    content = resp.content.decode("utf-8-sig")
-    assert "个案编号" in content and "个案内容" in content
-    assert "小满" in content
-    assert "考前焦虑" in content
-    assert "小圆" in content
+    assert "text/markdown" in resp.headers["content-type"]
+    markdown = resp.content.decode("utf-8")
+    assert markdown.startswith("# 个案记录")
+    assert "## 个案 #" in markdown
+    assert "小满" in markdown
+    assert "## 对话核心要点" in markdown
+    assert "小圆" in markdown
+    assert "---" in markdown
 
     resp = client.delete(f"/api/v1/coach/cases/{manual_id}", headers=coach_env["coach_headers"])
     assert resp.status_code == 204

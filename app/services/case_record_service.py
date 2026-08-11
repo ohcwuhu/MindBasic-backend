@@ -1,8 +1,5 @@
 """个案记录业务逻辑。"""
 
-import csv
-import io
-
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -86,21 +83,21 @@ async def list_all_cases(
     )
 
 
-def cases_to_csv(records: list[CaseRecord]) -> str:
-    """构建 UTF-8 BOM CSV（Excel 兼容）。"""
-    buf = io.StringIO()
-    writer = csv.writer(buf, quoting=csv.QUOTE_MINIMAL)
-    writer.writerow(["个案编号", "客户称呼", "记录时间", "个案内容(Markdown)", "服务时长(分钟)", "关联预约ID"])
+def cases_to_markdown(records: list[CaseRecord]) -> str:
+    """构建 Markdown 导出文档（每条个案一个章节）。"""
+    if not records:
+        return "# 个案记录\n\n（暂无个案记录）\n"
+    sections = ["# 个案记录\n"]
     for record in records:
-        writer.writerow([
-            record.id,
-            record.client_nickname or "",
-            to_iso(record.created_at),
-            record.content or "",
-            record.duration_min,
-            record.appointment_id or "",
-        ])
-    return "\ufeff" + buf.getvalue()
+        title = f"## 个案 #{record.id}：{record.client_nickname or '未命名客户'}"
+        meta = f"- 服务时长：{record.duration_min} 分钟\n- 记录时间：{to_iso(record.created_at)}"
+        if record.appointment_id:
+            meta += f"\n- 关联预约：#{record.appointment_id}"
+        sections.append(f"{title}\n\n{meta}\n")
+        if record.content:
+            sections.append(f"\n{record.content.strip()}\n")
+        sections.append("\n---\n")
+    return "\n".join(sections)
 
 
 async def update_case(
