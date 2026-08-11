@@ -152,9 +152,14 @@ def test_case_records_flow(client, coach_env):
         headers=coach_env["coach_headers"],
         json={
             "clientNickname": "小满",
-            "keyPoints": "考前焦虑，资源盘点后找到稳定节奏的方法",
-            "userGains": "学会了深呼吸与正面自我对话",
-            "followupAdvice": "考前一周每天练习 5 分钟",
+            "content": (
+                "## 对话核心要点\n"
+                "考前焦虑，资源盘点后找到稳定节奏的方法\n\n"
+                "## 用户收获\n"
+                "学会了深呼吸与正面自我对话\n\n"
+                "## 后续跟进建议\n"
+                "考前一周每天练习 5 分钟"
+            ),
             "durationMin": 60,
         },
     )
@@ -170,7 +175,7 @@ def test_case_records_flow(client, coach_env):
     resp = client.post(
         "/api/v1/coach/cases",
         headers=coach_env["coach_headers"],
-        json={"appointmentId": completed["id"], "clientNickname": "小圆", "durationMin": 60},
+        json={"appointmentId": completed["id"], "clientNickname": "小圆", "content": "## 对话核心要点\n小圆状态平稳", "durationMin": 60},
     )
     assert resp.status_code == 201
     linked_id = resp.json()["data"]["id"]
@@ -178,7 +183,7 @@ def test_case_records_flow(client, coach_env):
     resp = client.post(
         "/api/v1/coach/cases",
         headers=coach_env["coach_headers"],
-        json={"appointmentId": completed["id"], "durationMin": 30},
+        json={"appointmentId": completed["id"], "content": "重复预约", "durationMin": 30},
     )
     assert resp.status_code == 409
     assert resp.json()["code"] == "CONFLICT"
@@ -189,10 +194,10 @@ def test_case_records_flow(client, coach_env):
     resp = client.patch(
         f"/api/v1/coach/cases/{linked_id}",
         headers=coach_env["coach_headers"],
-        json={"followupAdvice": "每周复盘一次"},
+        json={"content": "## 对话核心要点\n小圆状态平稳\n\n## 后续跟进建议\n每周复盘一次"},
     )
     assert resp.status_code == 200
-    assert resp.json()["data"]["followupAdvice"] == "每周复盘一次"
+    assert "每周复盘一次" in resp.json()["data"]["content"]
 
     resp = client.get("/api/v1/coach/cases/stats", headers=coach_env["coach_headers"])
     stats = resp.json()["data"]
@@ -204,7 +209,7 @@ def test_case_records_flow(client, coach_env):
     assert resp.status_code == 200
     assert "text/csv" in resp.headers["content-type"]
     content = resp.content.decode("utf-8-sig")
-    assert "个案编号" in content and "对话要点" in content
+    assert "个案编号" in content and "个案内容" in content
     assert "小满" in content
     assert "考前焦虑" in content
     assert "小圆" in content

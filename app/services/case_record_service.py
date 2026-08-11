@@ -46,9 +46,7 @@ async def create_case(db: AsyncSession, coach_profile_id: int, data: CaseRecordI
         coach_id=coach_profile_id,
         appointment_id=data.appointment_id,
         client_nickname=data.client_nickname,
-        key_points=data.key_points,
-        user_gains=data.user_gains,
-        followup_advice=data.followup_advice,
+        content=data.content.strip(),
         duration_min=data.duration_min,
     )
     db.add(record)
@@ -92,15 +90,13 @@ def cases_to_csv(records: list[CaseRecord]) -> str:
     """构建 UTF-8 BOM CSV（Excel 兼容）。"""
     buf = io.StringIO()
     writer = csv.writer(buf, quoting=csv.QUOTE_MINIMAL)
-    writer.writerow(["个案编号", "客户称呼", "记录时间", "对话要点", "用户收获", "后续建议", "服务时长(分钟)", "关联预约ID"])
+    writer.writerow(["个案编号", "客户称呼", "记录时间", "个案内容(Markdown)", "服务时长(分钟)", "关联预约ID"])
     for record in records:
         writer.writerow([
             record.id,
             record.client_nickname or "",
             to_iso(record.created_at),
-            record.key_points or "",
-            record.user_gains or "",
-            record.followup_advice or "",
+            record.content or "",
             record.duration_min,
             record.appointment_id or "",
         ])
@@ -114,13 +110,12 @@ async def update_case(
     changes = data.model_dump(exclude_unset=True, exclude_none=True)
     for field in (
         "client_nickname",
-        "key_points",
-        "user_gains",
-        "followup_advice",
+        "content",
         "duration_min",
     ):
         if field in changes:
-            setattr(record, field, changes[field])
+            value = changes[field].strip() if field == "content" else changes[field]
+            setattr(record, field, value)
     await db.commit()
     await db.refresh(record)
     return record
@@ -169,9 +164,7 @@ def case_to_out(record: CaseRecord) -> dict:
         "id": record.id,
         "appointment_id": record.appointment_id,
         "client_nickname": record.client_nickname,
-        "key_points": record.key_points,
-        "user_gains": record.user_gains,
-        "followup_advice": record.followup_advice,
+        "content": record.content,
         "duration_min": record.duration_min,
         "created_at": to_iso(record.created_at),
         "updated_at": to_iso(record.updated_at),

@@ -293,6 +293,7 @@ class CaseRecord(Base):
     key_points = Column(Text, nullable=True, comment="对话核心要点")
     user_gains = Column(Text, nullable=True, comment="用户收获")
     followup_advice = Column(Text, nullable=True, comment="后续跟进建议")
+    content = Column(Text, nullable=True, comment="个案内容(Markdown 模板)")
     duration_min = Column(INTEGER(unsigned=True), nullable=False, server_default=text("0"))
     deleted_at = Column(DATETIME(fsp=3), nullable=True)
     created_at = Column(DATETIME(fsp=3), nullable=False, server_default=text("CURRENT_TIMESTAMP(3)"))
