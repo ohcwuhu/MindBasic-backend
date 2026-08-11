@@ -139,10 +139,27 @@ def test_reject_and_resubmit(client, admin_headers):
         assert data["auditStatus"] == "REJECTED"
         assert "督导记录" in data["auditRemark"]
 
-        # 重新提交
-        resp = client.post("/api/v1/coach/profile/submit-audit", headers=headers)
+        # 驳回后修改资料（含服务项）即视为重新提交
+        resp = client.patch(
+            "/api/v1/coach/profile",
+            headers=headers,
+            json={
+                "bio": "补充督导记录后的简介",
+                "services": [
+                    {"name": "单次咨询", "serviceType": "SINGLE", "durationMin": 60, "priceInCents": 12800},
+                    {"name": "职场陪伴套餐", "serviceType": "PACKAGE", "durationMin": 60, "priceInCents": 29900},
+                ],
+            },
+        )
         assert resp.status_code == 200
-        assert resp.json()["data"]["auditStatus"] == "PENDING"
+        updated = resp.json()["data"]
+        assert updated["auditStatus"] == "PENDING"
+        assert updated["bio"] == "补充督导记录后的简介"
+        services = {s["name"]: s for s in updated["services"]}
+        assert services["单次咨询"]["priceInCents"] == 12800
+        assert services["职场陪伴套餐"]["isEnabled"] is True
+        # 移除的服务项不删除、仅停用（保留历史预约关联）
+        assert services["高考5次陪伴卡"]["isEnabled"] is False
 
         # 审核中重复提交 → 409
         resp = client.post("/api/v1/coach/profile/submit-audit", headers=headers)

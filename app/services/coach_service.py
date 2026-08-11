@@ -429,8 +429,40 @@ async def update_profile(db: AsyncSession, user: User, data: CoachProfilePatchIn
         await db.execute(CoachTag.__table__.delete().where(CoachTag.coach_id == profile.id))
         db.add_all(CoachTag(coach_id=profile.id, tag_id=t.id) for t in tags)
 
-    # 审核通过后的资料修改需要重新审核
-    if profile.audit_status == "APPROVED":
+    if "services" in changes:
+        # 服务项目同步：按名称匹配更新，新增的创建，移除的停用（不删除，避免破坏历史预约关联）
+        current = await get_coach_services(db, profile.id)
+        by_name = {s.name: s for s in current}
+        incoming_names: set[str] = set()
+        for item in changes["services"]:
+            name = item["name"].strip()
+            if not name:
+                continue
+            incoming_names.add(name)
+            existing = by_name.get(name)
+            if existing is None:
+                db.add(Service(
+                    coach_id=profile.id,
+                    name=name,
+                    service_type=item["service_type"],
+                    duration_min=item["duration_min"],
+                    price_in_cents=item["price_in_cents"],
+                    description=item.get("description"),
+                    is_enabled=True,
+                ))
+            else:
+                existing.name = name
+                existing.service_type = item["service_type"]
+                existing.duration_min = item["duration_min"]
+                existing.price_in_cents = item["price_in_cents"]
+                existing.description = item.get("description")
+                existing.is_enabled = True
+        for service in current:
+            if service.name not in incoming_names:
+                service.is_enabled = False
+
+    # 已通过或已被驳回的资料修改都需要重新审核（驳回后修改即视为重新提交）
+    if profile.audit_status in ("APPROVED", "REJECTED"):
         latest = await latest_audit_version(db, profile.id)
         profile.audit_status = "PENDING"
         await create_audit_record(db, profile, version=latest + 1)

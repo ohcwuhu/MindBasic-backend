@@ -97,6 +97,7 @@ class CoachProfilePatchIn(ApiModel):
     credential_urls: list[str] | None = None
     id_card_url: str | None = Field(default=None, max_length=512)
     tag_ids: list[int] | None = None
+    services: list[ServiceIn] | None = None
 
 
 class TagOut(ApiModel):
