@@ -1,6 +1,7 @@
 """科普文章业务逻辑。"""
 
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import AppError
@@ -9,8 +10,8 @@ from app.services.content_sanitizer import sanitize_html
 from app.utils.time import to_iso
 
 
-def get_public_articles(
-    db: Session,
+async def get_public_articles(
+    db: AsyncSession,
     category_id: int | None,
     keyword: str | None,
     page: int,
@@ -24,9 +25,9 @@ def get_public_articles(
         stmt = stmt.where(Article.category_id == category_id)
     if keyword:
         stmt = stmt.where(Article.title.like(f"%{keyword}%"))
-    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    total = await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = list(
-        db.scalars(
+        await db.scalars(
             stmt.order_by(Article.is_pinned.desc(), Article.published_at.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
@@ -35,8 +36,8 @@ def get_public_articles(
     return rows, total
 
 
-def get_public_article_or_404(db: Session, article_id: int) -> Article:
-    article = db.scalar(
+async def get_public_article_or_404(db: AsyncSession, article_id: int) -> Article:
+    article = await db.scalar(
         select(Article).where(
             Article.id == article_id,
             Article.status == "PUBLISHED",
@@ -48,25 +49,25 @@ def get_public_article_or_404(db: Session, article_id: int) -> Article:
     return article
 
 
-def increment_view_count(db: Session, article: Article) -> None:
+async def increment_view_count(db: AsyncSession, article: Article) -> None:
     article.view_count += 1
-    db.commit()
-    db.refresh(article)
+    await db.commit()
+    await db.refresh(article)
 
 
-def list_categories(db: Session) -> list[ArticleCategory]:
+async def list_categories(db: AsyncSession) -> list[ArticleCategory]:
     stmt = (
         select(ArticleCategory)
         .where(ArticleCategory.is_enabled.is_(True))
         .order_by(ArticleCategory.sort_order)
     )
-    return list(db.scalars(stmt))
+    return list(await db.scalars(stmt))
 
 
-def get_favorite_ids(db: Session, user_id: int, article_ids: list[int]) -> set[int]:
+async def get_favorite_ids(db: AsyncSession, user_id: int, article_ids: list[int]) -> set[int]:
     if not article_ids:
         return set()
-    rows = db.scalars(
+    rows = await db.scalars(
         select(ArticleFavorite.article_id).where(
             ArticleFavorite.user_id == user_id,
             ArticleFavorite.article_id.in_(article_ids),
@@ -75,20 +76,20 @@ def get_favorite_ids(db: Session, user_id: int, article_ids: list[int]) -> set[i
     return set(rows)
 
 
-def toggle_favorite(db: Session, user_id: int, article_id: int) -> bool:
-    get_public_article_or_404(db, article_id)
-    favorite = db.scalar(
+async def toggle_favorite(db: AsyncSession, user_id: int, article_id: int) -> bool:
+    await get_public_article_or_404(db, article_id)
+    favorite = await db.scalar(
         select(ArticleFavorite).where(
             ArticleFavorite.user_id == user_id,
             ArticleFavorite.article_id == article_id,
         )
     )
     if favorite is not None:
-        db.delete(favorite)
-        db.commit()
+        await db.delete(favorite)
+        await db.commit()
         return False
     db.add(ArticleFavorite(user_id=user_id, article_id=article_id))
-    db.commit()
+    await db.commit()
     return True
 
 

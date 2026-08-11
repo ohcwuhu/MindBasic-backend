@@ -3,7 +3,7 @@
 from collections import defaultdict
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.coach import CoachProfile, CoachTag, Tag
 from app.models.content import Article, Banner
@@ -18,16 +18,16 @@ QUICK_ENTRIES = [
 ]
 
 
-def get_banners(db: Session) -> list[Banner]:
+async def get_banners(db: AsyncSession) -> list[Banner]:
     stmt = (
         select(Banner)
         .where(Banner.is_enabled.is_(True))
         .order_by(Banner.sort_order.asc(), Banner.id.asc())
     )
-    return list(db.scalars(stmt))
+    return list(await db.scalars(stmt))
 
 
-def get_featured_articles(db: Session, limit: int = 5) -> list[Article]:
+async def get_featured_articles(db: AsyncSession, limit: int = 5) -> list[Article]:
     stmt = (
         select(Article)
         .where(
@@ -37,12 +37,12 @@ def get_featured_articles(db: Session, limit: int = 5) -> list[Article]:
         .order_by(Article.is_pinned.desc(), Article.published_at.desc())
         .limit(limit)
     )
-    return list(db.scalars(stmt))
+    return list(await db.scalars(stmt))
 
 
-def get_recommended_coaches(db: Session, limit: int = 3) -> list[dict]:
+async def get_recommended_coaches(db: AsyncSession, limit: int = 3) -> list[dict]:
     coaches = list(
-        db.scalars(
+        await db.scalars(
             select(CoachProfile)
             .where(
                 CoachProfile.audit_status == "APPROVED",
@@ -58,16 +58,16 @@ def get_recommended_coaches(db: Session, limit: int = 3) -> list[dict]:
     coach_ids = [c.id for c in coaches]
     user_ids = [c.user_id for c in coaches]
 
-    tag_rows = db.execute(
+    tag_rows = (await db.execute(
         select(CoachTag.coach_id, Tag.name)
         .join(Tag, Tag.id == CoachTag.tag_id)
         .where(CoachTag.coach_id.in_(coach_ids))
-    ).all()
+    )).all()
     tags_map: dict[int, list[str]] = defaultdict(list)
     for coach_id, name in tag_rows:
         tags_map[coach_id].append(name)
 
-    users = {u.id: u for u in db.scalars(select(User).where(User.id.in_(user_ids)))}
+    users = {u.id: u for u in await db.scalars(select(User).where(User.id.in_(user_ids)))}
 
     return [
         {

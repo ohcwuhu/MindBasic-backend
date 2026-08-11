@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Request
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db, get_optional_user
+from app.api.deps import get_async_db, get_optional_user
 from app.api.response import ok
 from app.core.cache import get as cache_get, set as cache_set
 from app.models.user import User
@@ -31,24 +31,24 @@ def banner_to_out(banner) -> BannerOut:
 
 
 @router.get("")
-def get_home(
+async def get_home(
     request: Request,
     user: User | None = Depends(get_optional_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
     if user is None:
         cached = cache_get("home:anon")
         if cached is not None:
             return ok(cached, trace_id=request.state.trace_id)
-    banners = get_banners(db)
-    articles = get_featured_articles(db)
-    favorite_ids = get_favorite_ids(db, user.id, [a.id for a in articles]) if user else set()
+    banners = await get_banners(db)
+    articles = await get_featured_articles(db)
+    favorite_ids = await get_favorite_ids(db, user.id, [a.id for a in articles]) if user else set()
 
     home = HomeOut(
         banners=[banner_to_out(b) for b in banners],
         quick_entries=[QuickEntryOut(**entry) for entry in QUICK_ENTRIES],
         featured_articles=[ArticleListOut(**article_to_out(a, favorite_ids)) for a in articles],
-        recommended_coaches=[CoachBriefOut(**c) for c in get_recommended_coaches(db)],
+        recommended_coaches=[CoachBriefOut(**c) for c in await get_recommended_coaches(db)],
     )
     payload = home.model_dump(by_alias=True)
     if user is None:
@@ -57,6 +57,6 @@ def get_home(
 
 
 @router.get("/banners")
-def get_banners_endpoint(request: Request, db: Session = Depends(get_db)) -> dict:
-    items = [banner_to_out(b) for b in get_banners(db)]
+async def get_banners_endpoint(request: Request, db: AsyncSession = Depends(get_async_db)) -> dict:
+    items = [banner_to_out(b) for b in await get_banners(db)]
     return ok({"items": items}, trace_id=request.state.trace_id)
