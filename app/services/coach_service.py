@@ -490,7 +490,7 @@ async def profile_to_out(db: AsyncSession, profile: CoachProfile) -> dict:
     }
 
 
-def list_audits(db: Session, status: str | None, page: int, page_size: int) -> tuple[list[tuple[CoachAudit, User]], int]:
+async def list_audits(db: AsyncSession, status: str | None, page: int, page_size: int) -> tuple[list[tuple[CoachAudit, User]], int]:
     stmt = (
         select(CoachAudit, User)
         .join(CoachProfile, CoachProfile.id == CoachAudit.coach_id)
@@ -501,43 +501,43 @@ def list_audits(db: Session, status: str | None, page: int, page_size: int) -> t
     total_stmt = select(func.count()).select_from(CoachAudit)
     if status:
         total_stmt = total_stmt.where(CoachAudit.status == status)
-    total = db.scalar(total_stmt) or 0
-    rows = db.execute(
+    total = await db.scalar(total_stmt) or 0
+    rows = (await db.execute(
         stmt.order_by(CoachAudit.submitted_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
-    ).all()
+    )).all()
     return rows, total
 
 
-def get_audit_or_404(db: Session, audit_id: int) -> tuple[CoachAudit, User]:
-    row = db.execute(
+async def get_audit_or_404(db: AsyncSession, audit_id: int) -> tuple[CoachAudit, User]:
+    row = (await db.execute(
         select(CoachAudit, User)
         .join(CoachProfile, CoachProfile.id == CoachAudit.coach_id)
         .join(User, User.id == CoachProfile.user_id)
         .where(CoachAudit.id == audit_id)
-    ).first()
+    )).first()
     if row is None:
         raise AppError(404, "NOT_FOUND", "审核记录不存在")
     return row[0], row[1]
 
 
-def approve_audit(db: Session, admin: User, audit_id: int) -> CoachAudit:
+async def approve_audit(db: AsyncSession, admin: User, audit_id: int) -> CoachAudit:
     now = utcnow_naive()
-    result = db.execute(
+    result = await db.execute(
         update(CoachAudit)
         .where(CoachAudit.id == audit_id, CoachAudit.status == "PENDING")
         .values(status="APPROVED", remark=None, reviewed_by=admin.id, reviewed_at=now)
     )
     if result.rowcount == 0:
         raise AppError(409, "AUDIT_ALREADY_PROCESSED", "该申请已处理")
-    audit = db.get(CoachAudit, audit_id)
-    db.execute(
+    audit = await db.get(CoachAudit, audit_id)
+    await db.execute(
         update(CoachProfile)
         .where(CoachProfile.id == audit.coach_id)
         .values(audit_status="APPROVED")
     )
-    profile = db.get(CoachProfile, audit.coach_id)
+    profile = await db.get(CoachProfile, audit.coach_id)
     if profile is not None:
         notify(
             db,
@@ -553,27 +553,27 @@ def approve_audit(db: Session, admin: User, audit_id: int) -> CoachAudit:
         target_id=audit.id,
         detail={"coachId": audit.coach_id, "submitVersion": audit.submit_version},
     ))
-    db.commit()
-    db.refresh(audit)
+    await db.commit()
+    await db.refresh(audit)
     return audit
 
 
-def reject_audit(db: Session, admin: User, audit_id: int, reason: str) -> CoachAudit:
+async def reject_audit(db: AsyncSession, admin: User, audit_id: int, reason: str) -> CoachAudit:
     now = utcnow_naive()
-    result = db.execute(
+    result = await db.execute(
         update(CoachAudit)
         .where(CoachAudit.id == audit_id, CoachAudit.status == "PENDING")
         .values(status="REJECTED", remark=reason, reviewed_by=admin.id, reviewed_at=now)
     )
     if result.rowcount == 0:
         raise AppError(409, "AUDIT_ALREADY_PROCESSED", "该申请已处理")
-    audit = db.get(CoachAudit, audit_id)
-    db.execute(
+    audit = await db.get(CoachAudit, audit_id)
+    await db.execute(
         update(CoachProfile)
         .where(CoachProfile.id == audit.coach_id)
         .values(audit_status="REJECTED")
     )
-    profile = db.get(CoachProfile, audit.coach_id)
+    profile = await db.get(CoachProfile, audit.coach_id)
     if profile is not None:
         notify(
             db,
@@ -589,6 +589,6 @@ def reject_audit(db: Session, admin: User, audit_id: int, reason: str) -> CoachA
         target_id=audit.id,
         detail={"coachId": audit.coach_id, "submitVersion": audit.submit_version, "reason": reason},
     ))
-    db.commit()
-    db.refresh(audit)
+    await db.commit()
+    await db.refresh(audit)
     return audit

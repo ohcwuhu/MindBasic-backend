@@ -3,7 +3,7 @@
 from datetime import datetime, time
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppError
 from app.models.coach import CoachProfile, CoachTag
@@ -28,7 +28,7 @@ from app.utils.time import to_iso, utcnow_naive
 
 
 def write_admin_log(
-    db: Session, admin: User, action: str, target_type: str, target_id: int, detail: dict | None = None
+    db: AsyncSession, admin: User, action: str, target_type: str, target_id: int, detail: dict | None = None
 ) -> None:
     db.add(AdminActionLog(
         admin_id=admin.id,
@@ -42,8 +42,8 @@ def write_admin_log(
 # ---------- 用户管理 ----------
 
 
-def list_users(
-    db: Session, keyword: str | None, role: str | None, status: str | None, page: int, page_size: int
+async def list_users(
+    db: AsyncSession, keyword: str | None, role: str | None, status: str | None, page: int, page_size: int
 ) -> tuple[list[User], int]:
     stmt = select(User).where(User.deleted_at.is_(None))
     if keyword:
@@ -52,9 +52,9 @@ def list_users(
         stmt = stmt.where(User.role == role)
     if status:
         stmt = stmt.where(User.status == status)
-    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    total = await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = list(
-        db.scalars(
+        await db.scalars(
             stmt.order_by(User.created_at.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
@@ -63,10 +63,10 @@ def list_users(
     return rows, total
 
 
-def set_user_status(db: Session, admin: User, user_id: int, status: str) -> User:
+async def set_user_status(db: AsyncSession, admin: User, user_id: int, status: str) -> User:
     if user_id == admin.id:
         raise AppError(409, "CONFLICT", "不能修改自己的账号状态")
-    user = db.get(User, user_id)
+    user = await db.get(User, user_id)
     if user is None or user.deleted_at is not None:
         raise AppError(404, "NOT_FOUND", "用户不存在")
     user.status = status
@@ -78,8 +78,8 @@ def set_user_status(db: Session, admin: User, user_id: int, status: str) -> User
         target_id=user.id,
         detail={"from": "DISABLED" if status == "ENABLED" else "ENABLED", "to": status},
     )
-    db.commit()
-    db.refresh(user)
+    await db.commit()
+    await db.refresh(user)
     return user
 
 
@@ -98,8 +98,8 @@ def user_to_admin_out(user: User) -> dict:
 # ---------- 文章管理 ----------
 
 
-def list_admin_articles(
-    db: Session,
+async def list_admin_articles(
+    db: AsyncSession,
     status: str | None,
     category_id: int | None,
     keyword: str | None,
@@ -113,9 +113,9 @@ def list_admin_articles(
         stmt = stmt.where(Article.category_id == category_id)
     if keyword:
         stmt = stmt.where(Article.title.like(f"%{keyword}%"))
-    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    total = await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = list(
-        db.scalars(
+        await db.scalars(
             stmt.order_by(Article.created_at.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
@@ -124,8 +124,8 @@ def list_admin_articles(
     return rows, total
 
 
-def get_admin_article_or_404(db: Session, article_id: int) -> Article:
-    article = db.scalar(
+async def get_admin_article_or_404(db: AsyncSession, article_id: int) -> Article:
+    article = await db.scalar(
         select(Article).where(Article.id == article_id, Article.deleted_at.is_(None))
     )
     if article is None:
@@ -150,7 +150,7 @@ def article_to_admin_out(article: Article) -> dict:
     }
 
 
-def create_article(db: Session, data: ArticleAdminIn) -> Article:
+async def create_article(db: AsyncSession, data: ArticleAdminIn) -> Article:
     check_banned_words(data.title, data.summary, data.content)
     article = Article(
         title=data.title.strip(),
@@ -164,13 +164,13 @@ def create_article(db: Session, data: ArticleAdminIn) -> Article:
         published_at=utcnow_naive() if data.status == "PUBLISHED" else None,
     )
     db.add(article)
-    db.commit()
-    db.refresh(article)
+    await db.commit()
+    await db.refresh(article)
     return article
 
 
-def update_article(db: Session, article_id: int, data: ArticleAdminPatchIn) -> Article:
-    article = get_admin_article_or_404(db, article_id)
+async def update_article(db: AsyncSession, article_id: int, data: ArticleAdminPatchIn) -> Article:
+    article = await get_admin_article_or_404(db, article_id)
     changes = data.model_dump(exclude_unset=True)
     if not changes:
         return article
@@ -186,37 +186,37 @@ def update_article(db: Session, article_id: int, data: ArticleAdminPatchIn) -> A
             setattr(article, field, changes[field])
     if changes.get("status") == "PUBLISHED" and article.published_at is None:
         article.published_at = utcnow_naive()
-    db.commit()
-    db.refresh(article)
+    await db.commit()
+    await db.refresh(article)
     return article
 
 
-def delete_article(db: Session, article_id: int) -> None:
-    article = get_admin_article_or_404(db, article_id)
+async def delete_article(db: AsyncSession, article_id: int) -> None:
+    article = await get_admin_article_or_404(db, article_id)
     article.deleted_at = utcnow_naive()
-    db.commit()
+    await db.commit()
 
 
 # ---------- 文章分类 ----------
 
 
-def list_admin_categories(db: Session) -> list[ArticleCategory]:
+async def list_admin_categories(db: AsyncSession) -> list[ArticleCategory]:
     return list(
-        db.scalars(
+        await db.scalars(
             select(ArticleCategory).order_by(ArticleCategory.sort_order, ArticleCategory.id)
         )
     )
 
 
-def get_category_or_404(db: Session, category_id: int) -> ArticleCategory:
-    category = db.get(ArticleCategory, category_id)
+async def get_category_or_404(db: AsyncSession, category_id: int) -> ArticleCategory:
+    category = await db.get(ArticleCategory, category_id)
     if category is None:
         raise AppError(404, "CATEGORY_NOT_FOUND", "分类不存在")
     return category
 
 
-def create_category(db: Session, data: CategoryIn) -> ArticleCategory:
-    exists = db.scalar(select(ArticleCategory.id).where(ArticleCategory.name == data.name.strip()))
+async def create_category(db: AsyncSession, data: CategoryIn) -> ArticleCategory:
+    exists = await db.scalar(select(ArticleCategory.id).where(ArticleCategory.name == data.name.strip()))
     if exists is not None:
         raise AppError(409, "CONFLICT", "分类名称已存在")
     category = ArticleCategory(
@@ -225,16 +225,16 @@ def create_category(db: Session, data: CategoryIn) -> ArticleCategory:
         is_enabled=data.is_enabled,
     )
     db.add(category)
-    db.commit()
-    db.refresh(category)
+    await db.commit()
+    await db.refresh(category)
     return category
 
 
-def update_category(db: Session, category_id: int, data: CategoryPatchIn) -> ArticleCategory:
-    category = get_category_or_404(db, category_id)
+async def update_category(db: AsyncSession, category_id: int, data: CategoryPatchIn) -> ArticleCategory:
+    category = await get_category_or_404(db, category_id)
     changes = data.model_dump(exclude_unset=True)
     if "name" in changes:
-        dup = db.scalar(
+        dup = await db.scalar(
             select(ArticleCategory.id).where(
                 ArticleCategory.name == changes["name"].strip(),
                 ArticleCategory.id != category_id,
@@ -247,14 +247,14 @@ def update_category(db: Session, category_id: int, data: CategoryPatchIn) -> Art
         category.sort_order = changes["sort_order"]
     if "is_enabled" in changes:
         category.is_enabled = changes["is_enabled"]
-    db.commit()
-    db.refresh(category)
+    await db.commit()
+    await db.refresh(category)
     return category
 
 
-def delete_category(db: Session, category_id: int) -> None:
-    category = get_category_or_404(db, category_id)
-    article_count = db.scalar(
+async def delete_category(db: AsyncSession, category_id: int) -> None:
+    category = await get_category_or_404(db, category_id)
+    article_count = await db.scalar(
         select(func.count()).select_from(Article).where(
             Article.category_id == category_id,
             Article.deleted_at.is_(None),
@@ -262,8 +262,8 @@ def delete_category(db: Session, category_id: int) -> None:
     ) or 0
     if article_count:
         raise AppError(409, "CONFLICT", "分类下存在文章，无法删除")
-    db.delete(category)
-    db.commit()
+    await db.delete(category)
+    await db.commit()
 
 
 def category_to_out(category: ArticleCategory) -> dict:
@@ -278,14 +278,14 @@ def category_to_out(category: ArticleCategory) -> dict:
 # ---------- 轮播图 ----------
 
 
-def list_admin_banners(db: Session) -> list[Banner]:
+async def list_admin_banners(db: AsyncSession) -> list[Banner]:
     return list(
-        db.scalars(select(Banner).order_by(Banner.sort_order, Banner.id))
+        await db.scalars(select(Banner).order_by(Banner.sort_order, Banner.id))
     )
 
 
-def get_banner_or_404(db: Session, banner_id: int) -> Banner:
-    banner = db.get(Banner, banner_id)
+async def get_banner_or_404(db: AsyncSession, banner_id: int) -> Banner:
+    banner = await db.get(Banner, banner_id)
     if banner is None:
         raise AppError(404, "NOT_FOUND", "轮播图不存在")
     return banner
@@ -295,7 +295,7 @@ def parse_dt(value: str | None):
     return datetime.fromisoformat(value) if value else None
 
 
-def create_banner(db: Session, data: BannerIn) -> Banner:
+async def create_banner(db: AsyncSession, data: BannerIn) -> Banner:
     banner = Banner(
         title=data.title.strip(),
         image_url=data.image_url.strip(),
@@ -307,13 +307,13 @@ def create_banner(db: Session, data: BannerIn) -> Banner:
         end_at=parse_dt(data.end_at),
     )
     db.add(banner)
-    db.commit()
-    db.refresh(banner)
+    await db.commit()
+    await db.refresh(banner)
     return banner
 
 
-def update_banner(db: Session, banner_id: int, data: BannerPatchIn) -> Banner:
-    banner = get_banner_or_404(db, banner_id)
+async def update_banner(db: AsyncSession, banner_id: int, data: BannerPatchIn) -> Banner:
+    banner = await get_banner_or_404(db, banner_id)
     changes = data.model_dump(exclude_unset=True)
     for field in ("title", "image_url", "link_type", "link_value", "sort_order", "is_enabled"):
         if field in changes:
@@ -322,15 +322,15 @@ def update_banner(db: Session, banner_id: int, data: BannerPatchIn) -> Banner:
         banner.start_at = parse_dt(changes["start_at"])
     if "end_at" in changes:
         banner.end_at = parse_dt(changes["end_at"])
-    db.commit()
-    db.refresh(banner)
+    await db.commit()
+    await db.refresh(banner)
     return banner
 
 
-def delete_banner(db: Session, banner_id: int) -> None:
-    banner = get_banner_or_404(db, banner_id)
-    db.delete(banner)
-    db.commit()
+async def delete_banner(db: AsyncSession, banner_id: int) -> None:
+    banner = await get_banner_or_404(db, banner_id)
+    await db.delete(banner)
+    await db.commit()
 
 
 def banner_to_admin_out(banner: Banner) -> dict:
@@ -351,28 +351,28 @@ def banner_to_admin_out(banner: Banner) -> dict:
 # ---------- 标签 ----------
 
 
-def list_admin_tags(db: Session, tag_type: str | None) -> list:
+async def list_admin_tags(db: AsyncSession, tag_type: str | None) -> list:
     from app.models.coach import Tag
 
     stmt = select(Tag).order_by(Tag.type, Tag.sort_order, Tag.id)
     if tag_type:
         stmt = stmt.where(Tag.type == tag_type)
-    return list(db.scalars(stmt))
+    return list(await db.scalars(stmt))
 
 
-def get_tag_or_404(db: Session, tag_id: int):
+async def get_tag_or_404(db: AsyncSession, tag_id: int):
     from app.models.coach import Tag
 
-    tag = db.get(Tag, tag_id)
+    tag = await db.get(Tag, tag_id)
     if tag is None:
         raise AppError(404, "NOT_FOUND", "标签不存在")
     return tag
 
 
-def create_tag(db: Session, data: TagIn):
+async def create_tag(db: AsyncSession, data: TagIn):
     from app.models.coach import Tag
 
-    dup = db.scalar(
+    dup = await db.scalar(
         select(Tag.id).where(Tag.name == data.name.strip(), Tag.type == data.type)
     )
     if dup is not None:
@@ -384,18 +384,18 @@ def create_tag(db: Session, data: TagIn):
         is_enabled=data.is_enabled,
     )
     db.add(tag)
-    db.commit()
-    db.refresh(tag)
+    await db.commit()
+    await db.refresh(tag)
     return tag
 
 
-def update_tag(db: Session, tag_id: int, data: TagPatchIn):
+async def update_tag(db: AsyncSession, tag_id: int, data: TagPatchIn):
     from app.models.coach import Tag
 
-    tag = get_tag_or_404(db, tag_id)
+    tag = await get_tag_or_404(db, tag_id)
     changes = data.model_dump(exclude_unset=True)
     if "name" in changes:
-        dup = db.scalar(
+        dup = await db.scalar(
             select(Tag.id).where(
                 Tag.name == changes["name"].strip(),
                 Tag.type == tag.type,
@@ -409,18 +409,18 @@ def update_tag(db: Session, tag_id: int, data: TagPatchIn):
         tag.sort_order = changes["sort_order"]
     if "is_enabled" in changes:
         tag.is_enabled = changes["is_enabled"]
-    db.commit()
-    db.refresh(tag)
+    await db.commit()
+    await db.refresh(tag)
     return tag
 
 
-def delete_tag(db: Session, tag_id: int) -> None:
-    tag = get_tag_or_404(db, tag_id)
-    used = db.scalar(select(func.count()).select_from(CoachTag).where(CoachTag.tag_id == tag_id)) or 0
+async def delete_tag(db: AsyncSession, tag_id: int) -> None:
+    tag = await get_tag_or_404(db, tag_id)
+    used = await db.scalar(select(func.count()).select_from(CoachTag).where(CoachTag.tag_id == tag_id)) or 0
     if used:
         raise AppError(409, "CONFLICT", "标签已被教练使用，无法删除")
-    db.delete(tag)
-    db.commit()
+    await db.delete(tag)
+    await db.commit()
 
 
 def tag_to_admin_out(tag) -> dict:
@@ -436,21 +436,21 @@ def tag_to_admin_out(tag) -> dict:
 # ---------- 情绪话术库 ----------
 
 
-def list_admin_feedback(db: Session, mood_type: str | None) -> list[EmotionFeedbackLib]:
+async def list_admin_feedback(db: AsyncSession, mood_type: str | None) -> list[EmotionFeedbackLib]:
     stmt = select(EmotionFeedbackLib).order_by(EmotionFeedbackLib.mood_type, EmotionFeedbackLib.sort_order)
     if mood_type:
         stmt = stmt.where(EmotionFeedbackLib.mood_type == mood_type)
-    return list(db.scalars(stmt))
+    return list(await db.scalars(stmt))
 
 
-def get_feedback_or_404(db: Session, item_id: int) -> EmotionFeedbackLib:
-    item = db.get(EmotionFeedbackLib, item_id)
+async def get_feedback_or_404(db: AsyncSession, item_id: int) -> EmotionFeedbackLib:
+    item = await db.get(EmotionFeedbackLib, item_id)
     if item is None:
         raise AppError(404, "NOT_FOUND", "话术不存在")
     return item
 
 
-def create_feedback(db: Session, data: FeedbackIn) -> EmotionFeedbackLib:
+async def create_feedback(db: AsyncSession, data: FeedbackIn) -> EmotionFeedbackLib:
     item = EmotionFeedbackLib(
         mood_type=data.mood_type,
         content=data.content.strip(),
@@ -458,13 +458,13 @@ def create_feedback(db: Session, data: FeedbackIn) -> EmotionFeedbackLib:
         is_enabled=data.is_enabled,
     )
     db.add(item)
-    db.commit()
-    db.refresh(item)
+    await db.commit()
+    await db.refresh(item)
     return item
 
 
-def update_feedback(db: Session, item_id: int, data: FeedbackPatchIn) -> EmotionFeedbackLib:
-    item = get_feedback_or_404(db, item_id)
+async def update_feedback(db: AsyncSession, item_id: int, data: FeedbackPatchIn) -> EmotionFeedbackLib:
+    item = await get_feedback_or_404(db, item_id)
     changes = data.model_dump(exclude_unset=True)
     if "content" in changes:
         item.content = changes["content"].strip()
@@ -472,15 +472,15 @@ def update_feedback(db: Session, item_id: int, data: FeedbackPatchIn) -> Emotion
         item.sort_order = changes["sort_order"]
     if "is_enabled" in changes:
         item.is_enabled = changes["is_enabled"]
-    db.commit()
-    db.refresh(item)
+    await db.commit()
+    await db.refresh(item)
     return item
 
 
-def delete_feedback(db: Session, item_id: int) -> None:
-    item = get_feedback_or_404(db, item_id)
-    db.delete(item)
-    db.commit()
+async def delete_feedback(db: AsyncSession, item_id: int) -> None:
+    item = await get_feedback_or_404(db, item_id)
+    await db.delete(item)
+    await db.commit()
 
 
 def feedback_to_out(item: EmotionFeedbackLib) -> dict:
@@ -496,11 +496,11 @@ def feedback_to_out(item: EmotionFeedbackLib) -> dict:
 # ---------- 统计 ----------
 
 
-def admin_stats(db: Session) -> dict:
+async def admin_stats(db: AsyncSession) -> dict:
     today_start = datetime.combine(datetime.now().date(), time.min)
-    user_count = db.scalar(select(func.count()).select_from(User).where(User.deleted_at.is_(None))) or 0
-    coach_count = db.scalar(select(func.count()).select_from(CoachProfile).where(CoachProfile.deleted_at.is_(None))) or 0
-    approved_coach_count = db.scalar(
+    user_count = await db.scalar(select(func.count()).select_from(User).where(User.deleted_at.is_(None))) or 0
+    coach_count = await db.scalar(select(func.count()).select_from(CoachProfile).where(CoachProfile.deleted_at.is_(None))) or 0
+    approved_coach_count = await db.scalar(
         select(func.count()).select_from(CoachProfile).where(
             CoachProfile.audit_status == "APPROVED",
             CoachProfile.deleted_at.is_(None),
@@ -508,20 +508,20 @@ def admin_stats(db: Session) -> dict:
     ) or 0
     from app.models.coach import Appointment
 
-    appointment_count = db.scalar(select(func.count()).select_from(Appointment)) or 0
-    pending_appointment_count = db.scalar(
+    appointment_count = await db.scalar(select(func.count()).select_from(Appointment)) or 0
+    pending_appointment_count = await db.scalar(
         select(func.count()).select_from(Appointment).where(Appointment.status == "PENDING")
     ) or 0
-    article_count = db.scalar(
+    article_count = await db.scalar(
         select(func.count()).select_from(Article).where(
             Article.status == "PUBLISHED",
             Article.deleted_at.is_(None),
         )
     ) or 0
-    today_user_count = db.scalar(
+    today_user_count = await db.scalar(
         select(func.count()).select_from(User).where(User.created_at >= today_start)
     ) or 0
-    today_appointment_count = db.scalar(
+    today_appointment_count = await db.scalar(
         select(func.count()).select_from(Appointment).where(Appointment.created_at >= today_start)
     ) or 0
     return {
