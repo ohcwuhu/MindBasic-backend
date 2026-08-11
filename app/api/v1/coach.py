@@ -51,6 +51,7 @@ from app.utils.time import to_iso
 from app.services.appointment_service import (
     cancel_coach_appointment,
     coach_appointment_to_out,
+    coach_appointments_to_out,
     complete_appointment,
     confirm_appointment,
     list_coach_appointments,
@@ -410,7 +411,7 @@ def coach_appointments(
     db: Session = Depends(get_db),
 ) -> dict:
     rows, total = list_coach_appointments(db, coach.id, status, date, page, pageSize)
-    items = [CoachAppointmentOut(**coach_appointment_to_out(db, a)).model_dump(by_alias=True) for a in rows]
+    items = [CoachAppointmentOut(**item).model_dump(by_alias=True) for item in coach_appointments_to_out(db, rows)]
     return ok(paginated(items, total, page, pageSize), trace_id=request.state.trace_id)
 
 

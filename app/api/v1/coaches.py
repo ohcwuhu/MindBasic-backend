@@ -1,5 +1,6 @@
 """公开教练目录：列表、详情、可预约时段。"""
 
+from collections import defaultdict
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -56,6 +57,39 @@ def coach_brief(db: Session, coach: CoachProfile) -> dict:
     }
 
 
+def coach_briefs(db: Session, coaches: list[CoachProfile]) -> list[dict]:
+    """批量构造教练摘要（避免列表接口 N+1）。"""
+    if not coaches:
+        return []
+    coach_ids = [c.id for c in coaches]
+    user_ids = [c.user_id for c in coaches]
+
+    tag_rows = db.execute(
+        select(CoachTag.coach_id, Tag.name)
+        .join(Tag, Tag.id == CoachTag.tag_id)
+        .where(CoachTag.coach_id.in_(coach_ids))
+        .order_by(Tag.sort_order)
+    ).all()
+    tags_map: dict[int, list[str]] = defaultdict(list)
+    for coach_id, name in tag_rows:
+        tags_map[coach_id].append(name)
+
+    users = {u.id: u for u in db.scalars(select(User).where(User.id.in_(user_ids)))}
+    return [
+        {
+            "id": c.id,
+            "nickname": users[c.user_id].nickname if c.user_id in users else "",
+            "avatarUrl": users[c.user_id].avatar_url if c.user_id in users else None,
+            "tagNames": tags_map.get(c.id, []),
+            "yearsOfExperience": c.years_of_experience,
+            "rating": float(c.rating),
+            "reviewCount": c.review_count,
+            "serviceConcept": c.service_concept,
+        }
+        for c in coaches
+    ]
+
+
 @router.get("")
 def list_coaches(
     request: Request,
@@ -88,7 +122,7 @@ def list_coaches(
             .limit(pageSize)
         )
     )
-    items = [coach_brief(db, c) for c in coaches]
+    items = coach_briefs(db, coaches)
     return ok(paginated(items, total, page, pageSize), trace_id=request.state.trace_id)
 
 

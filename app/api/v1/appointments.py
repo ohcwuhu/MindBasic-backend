@@ -11,6 +11,7 @@ from app.services.appointment_service import (
     create_appointment,
     get_appointment_ctx,
     list_my_appointments,
+    my_appointments_to_out,
 )
 from app.services.review_service import create_review, get_my_review, review_to_out
 
@@ -47,7 +48,7 @@ def my_appointments(
     db: Session = Depends(get_db),
 ) -> dict:
     rows, total = list_my_appointments(db, user.id, status, page, pageSize)
-    items = [AppointmentOut(**get_appointment_ctx(db, a)).model_dump(by_alias=True) for a in rows]
+    items = [AppointmentOut(**item).model_dump(by_alias=True) for item in my_appointments_to_out(db, rows)]
     return ok(paginated(items, total, page, pageSize), trace_id=request.state.trace_id)
 
 

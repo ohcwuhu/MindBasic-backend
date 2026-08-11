@@ -134,6 +134,58 @@ def get_appointment_ctx(db: Session, appointment: Appointment) -> dict:
     }
 
 
+def my_appointments_to_out(db: Session, appointments: list[Appointment]) -> list[dict]:
+    """批量序列化我的预约（避免列表接口 N+1）。"""
+    if not appointments:
+        return []
+    coach_ids = [a.coach_id for a in appointments]
+    service_ids = [a.service_id for a in appointments]
+    slot_ids = [a.slot_id for a in appointments]
+    appointment_ids = [a.id for a in appointments]
+
+    coaches = {c.id: c for c in db.scalars(select(CoachProfile).where(CoachProfile.id.in_(coach_ids)))}
+    coach_user_ids = [c.user_id for c in coaches.values()]
+    users = {u.id: u for u in db.scalars(select(User).where(User.id.in_(coach_user_ids)))}
+    services = {s.id: s for s in db.scalars(select(Service).where(Service.id.in_(service_ids)))}
+    slots = {s.id: s for s in db.scalars(select(CoachSlot).where(CoachSlot.id.in_(slot_ids)))}
+    reviewed_ids = set(db.scalars(select(Review.appointment_id).where(Review.appointment_id.in_(appointment_ids))))
+
+    items: list[dict] = []
+    for a in appointments:
+        coach = coaches.get(a.coach_id)
+        coach_user = users.get(coach.user_id) if coach else None
+        service = services.get(a.service_id)
+        slot = slots.get(a.slot_id)
+        items.append({
+            "id": a.id,
+            "appointment_no": a.appointment_no,
+            "coach": {
+                "id": a.coach_id,
+                "nickname": coach_user.nickname if coach_user else "",
+                "avatar_url": coach_user.avatar_url if coach_user else None,
+            },
+            "service": {
+                "id": service.id,
+                "name": service.name,
+                "service_type": service.service_type,
+                "price_in_cents": service.price_in_cents,
+            } if service else None,
+            "slot": {
+                "id": slot.id,
+                "date": slot.date.isoformat(),
+                "start_time": slot.start_time.strftime("%H:%M"),
+                "end_time": slot.end_time.strftime("%H:%M"),
+            } if slot else None,
+            "need_desc": a.need_desc,
+            "status": a.status,
+            "cancel_reason": a.cancel_reason,
+            "can_cancel": a.status in ("PENDING", "CONFIRMED"),
+            "reviewed": a.id in reviewed_ids,
+            "created_at": to_iso(a.created_at),
+        })
+    return items
+
+
 def list_my_appointments(
     db: Session, user_id: int, status: str | None, page: int, page_size: int
 ) -> tuple[list[Appointment], int]:
@@ -251,6 +303,54 @@ def coach_appointment_to_out(db: Session, appointment: Appointment) -> dict:
         "created_at": to_iso(appointment.created_at),
         "completed_at": to_iso(appointment.completed_at),
     }
+
+
+def coach_appointments_to_out(db: Session, appointments: list[Appointment]) -> list[dict]:
+    """批量序列化教练端预约列表（避免列表接口 N+1）。"""
+    if not appointments:
+        return []
+    user_ids = [a.user_id for a in appointments]
+    service_ids = [a.service_id for a in appointments]
+    slot_ids = [a.slot_id for a in appointments]
+
+    users = {u.id: u for u in db.scalars(select(User).where(User.id.in_(user_ids)))}
+    services = {s.id: s for s in db.scalars(select(Service).where(Service.id.in_(service_ids)))}
+    slots = {s.id: s for s in db.scalars(select(CoachSlot).where(CoachSlot.id.in_(slot_ids)))}
+
+    from app.services.auth_service import mask_phone
+
+    items: list[dict] = []
+    for a in appointments:
+        user = users.get(a.user_id)
+        service = services.get(a.service_id)
+        slot = slots.get(a.slot_id)
+        items.append({
+            "id": a.id,
+            "appointment_no": a.appointment_no,
+            "user": {
+                "id": user.id if user else 0,
+                "nickname": user.nickname if user else "",
+                "phone": mask_phone(user.phone) if user else "",
+            },
+            "service": {
+                "id": service.id,
+                "name": service.name,
+                "service_type": service.service_type,
+                "price_in_cents": service.price_in_cents,
+            } if service else None,
+            "slot": {
+                "id": slot.id,
+                "date": slot.date.isoformat(),
+                "start_time": slot.start_time.strftime("%H:%M"),
+                "end_time": slot.end_time.strftime("%H:%M"),
+            } if slot else None,
+            "need_desc": a.need_desc,
+            "status": a.status,
+            "cancel_reason": a.cancel_reason,
+            "created_at": to_iso(a.created_at),
+            "completed_at": to_iso(a.completed_at),
+        })
+    return items
 
 
 def confirm_appointment(db: Session, coach_profile_id: int, appointment_id: int) -> Appointment:
