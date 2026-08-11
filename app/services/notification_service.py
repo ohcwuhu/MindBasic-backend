@@ -2,14 +2,13 @@
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
 
 from app.core.exceptions import AppError
 from app.models.notification import Notification
 from app.utils.time import to_iso
 
 
-def notify(db: Session, user_id: int, type_: str, title: str, content: str) -> None:
+async def notify(db: AsyncSession, user_id: int, type_: str, title: str, content: str) -> None:
     """写入一条通知（由调用方负责提交事务）。"""
     db.add(Notification(user_id=user_id, type=type_, title=title, content=content, is_read=False))
 

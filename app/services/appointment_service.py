@@ -76,7 +76,7 @@ async def create_appointment(
         idempotency_key=idempotency_key,
     )
     db.add(appointment)
-    notify(
+    await notify(
         db,
         coach.user_id,
         "APPOINTMENT",
@@ -359,7 +359,7 @@ async def confirm_appointment(db: AsyncSession, coach_profile_id: int, appointme
     appointment.status = "CONFIRMED"
     coach_profile = await db.get(CoachProfile, coach_profile_id)
     coach_user = await db.get(User, coach_profile.user_id) if coach_profile else None
-    notify(
+    await notify(
         db,
         appointment.user_id,
         "APPOINTMENT",
@@ -380,7 +380,7 @@ async def cancel_coach_appointment(
     appointment.status = "CANCELLED"
     appointment.cancel_reason = reason
     appointment.cancel_by = coach_user_id
-    notify(
+    await notify(
         db,
         appointment.user_id,
         "APPOINTMENT",

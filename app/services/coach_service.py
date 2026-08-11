@@ -2,7 +2,6 @@
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
 
 from app.core.exceptions import AppError
 from app.models.coach import (
@@ -539,7 +538,7 @@ async def approve_audit(db: AsyncSession, admin: User, audit_id: int) -> CoachAu
     )
     profile = await db.get(CoachProfile, audit.coach_id)
     if profile is not None:
-        notify(
+        await notify(
             db,
             profile.user_id,
             "AUDIT",
@@ -575,7 +574,7 @@ async def reject_audit(db: AsyncSession, admin: User, audit_id: int, reason: str
     )
     profile = await db.get(CoachProfile, audit.coach_id)
     if profile is not None:
-        notify(
+        await notify(
             db,
             profile.user_id,
             "AUDIT",

@@ -6,9 +6,9 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, get_db, get_optional_user
+from app.api.deps import get_async_db, get_current_user, get_optional_user
 from app.api.response import ok
 from app.core.exceptions import AppError
 from app.models.file import FileUpload
@@ -35,7 +35,7 @@ async def upload_file(
     file: UploadFile = File(...),
     usage: str = Form(default="general"),
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
     content_type = file.content_type or ""
     if usage not in ALLOWED_USAGES:
@@ -64,12 +64,12 @@ async def upload_file(
     )
     db.add(record)
     try:
-        db.commit()
-        db.refresh(record)
+        await db.commit()
+        await db.refresh(record)
     except Exception:
         # 入库失败时清理已写盘的文件，避免孤儿文件
         path.unlink(missing_ok=True)
-        db.rollback()
+        await db.rollback()
         raise
     return ok(
         {
@@ -83,13 +83,13 @@ async def upload_file(
 
 
 @router.get("/{file_id}/content")
-def download_file(
+async def download_file(
     file_id: str,
     request: Request,
     user: User | None = Depends(get_optional_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> FileResponse:
-    record = db.scalar(select(FileUpload).where(FileUpload.file_id == file_id))
+    record = await db.scalar(select(FileUpload).where(FileUpload.file_id == file_id))
     if record is None:
         raise AppError(404, "NOT_FOUND", "文件不存在")
     if record.is_private:
