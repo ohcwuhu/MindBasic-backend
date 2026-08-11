@@ -238,12 +238,13 @@ async def coach_replace_slots(
 async def coach_clients(
     request: Request,
     keyword: str | None = Query(default=None, max_length=32),
+    followupDays: int | None = Query(default=None, ge=1, le=90, alias="followupDays"),
     page: int = Query(default=1, ge=1),
     pageSize: int = Query(default=10, ge=1, le=50, alias="pageSize"),
     coach: CoachProfile = Depends(get_current_coach),
     db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    rows, total = await list_clients(db, coach.id, keyword, page, pageSize)
+    rows, total = await list_clients(db, coach.id, keyword, followupDays, page, pageSize)
     items = [
         ClientOut(
             id=relation.id,

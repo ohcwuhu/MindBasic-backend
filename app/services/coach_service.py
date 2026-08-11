@@ -20,7 +20,7 @@ from app.schemas.coach import CoachProfileIn, CoachProfilePatchIn, ServiceIn
 from app.schemas.coach import ServicePatchIn, SlotBatchIn, SlotIn
 from app.utils.time import to_iso, utcnow_naive
 from datetime import date as date_type
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 async def get_profile_by_user(db: AsyncSession, user_id: int) -> CoachProfile | None:
@@ -211,7 +211,12 @@ async def replace_coach_slots(db: AsyncSession, coach_profile_id: int, data: Slo
 
 
 async def list_clients(
-    db: AsyncSession, coach_profile_id: int, keyword: str | None, page: int, page_size: int
+    db: AsyncSession,
+    coach_profile_id: int,
+    keyword: str | None,
+    followup_days: int | None,
+    page: int,
+    page_size: int,
 ) -> tuple[list[tuple[ClientRelation, User]], int]:
     stmt = (
         select(ClientRelation, User)
@@ -220,9 +225,15 @@ async def list_clients(
     )
     if keyword:
         stmt = stmt.where(User.nickname.like(f"%{keyword}%"))
+    if followup_days:
+        cutoff = utcnow_naive() - timedelta(days=followup_days)
+        stmt = stmt.where(ClientRelation.last_appointment_at < cutoff)
+        order_by = ClientRelation.last_appointment_at.asc()
+    else:
+        order_by = ClientRelation.last_appointment_at.desc()
     total = await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = (await db.execute(
-        stmt.order_by(ClientRelation.last_appointment_at.desc())
+        stmt.order_by(order_by)
         .offset((page - 1) * page_size)
         .limit(page_size)
     )).all()

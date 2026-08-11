@@ -370,3 +370,54 @@ def test_coach_services_and_slots_management(client, coach_env):
         json={"slots": [{"date": past, "startTime": "09:00", "endTime": "10:00"}]},
     )
     assert resp.status_code == 400
+
+
+def test_clients_followup_reminder(client, coach_env, auth_headers):
+    """客户跟进提醒：N 天未联系的客户进入待跟进列表。"""
+    from datetime import datetime, timedelta as td
+
+    from app.models.v1_1 import ClientRelation
+
+    temp_phone = unique_phone()
+    reg = client.post(
+        "/api/v1/auth/register",
+        json={"phone": temp_phone, "password": "Test123456", "nickname": "跟进测试", "privacyAgreed": True},
+    )
+    assert reg.status_code == 201
+    user_id = reg.json()["data"]["user"]["id"]
+    db = SessionLocal()
+    relation_id = None
+    try:
+        old = ClientRelation(
+            coach_id=coach_env["coach_id"],
+            user_id=user_id,
+            last_appointment_at=datetime.utcnow() - td(days=45),
+            remark=None,
+        )
+        db.add(old)
+        db.commit()
+        relation_id = old.id
+    finally:
+        db.close()
+    try:
+        resp = client.get(
+            "/api/v1/coach/clients?followupDays=30&page=1&pageSize=10",
+            headers=coach_env["coach_headers"],
+        )
+        assert resp.status_code == 200
+        assert any(item["id"] == relation_id for item in resp.json()["data"]["items"])
+
+        resp = client.get(
+            "/api/v1/coach/clients?followupDays=90&page=1&pageSize=10",
+            headers=coach_env["coach_headers"],
+        )
+        assert not any(item["id"] == relation_id for item in resp.json()["data"]["items"])
+    finally:
+        db = SessionLocal()
+        try:
+            if relation_id is not None:
+                db.execute(ClientRelation.__table__.delete().where(ClientRelation.id == relation_id))
+                db.commit()
+        finally:
+            db.close()
+    delete_user_by_phone(temp_phone)
