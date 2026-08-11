@@ -17,6 +17,14 @@ class Settings(BaseSettings):
     rate_limit_backend: str = "memory"
     redis_url: str = ""
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    # 邮箱验证码（短信替代方案）：默认关闭，开启后走 SMTP
+    email_enabled: bool = False
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    email_code_ttl_minutes: int = 10
 
     model_config = SettingsConfigDict(
         env_file=".env",

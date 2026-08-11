@@ -4,13 +4,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_async_db, get_current_user
 from app.api.response import ok, paginated
 from app.models.user import User
-from app.schemas.auth import ChangePasswordIn, UserPatchIn
+from app.schemas.auth import ChangePasswordIn, EmailBindIn, UserPatchIn
 from app.schemas.article import ArticleListOut
 from app.schemas.checkin import BadgeOut
 from app.services.article_service import article_to_out, list_my_favorites
 from app.services.auth_service import to_user_out
 from app.services.checkin_service import my_badges
-from app.services.auth_service import change_password, deactivate_account
+from app.services.auth_service import bind_email, change_password, deactivate_account
 from app.core.security import blacklist_access_token
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -42,6 +42,17 @@ async def patch_me(
     await db.commit()
     await db.refresh(user)
     return ok(to_user_out(user).model_dump(by_alias=True), trace_id=request.state.trace_id)
+
+
+@router.post("/me/email")
+async def bind_my_email(
+    body: EmailBindIn,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+) -> dict:
+    updated = await bind_email(db, user, body.email, body.code)
+    return ok(to_user_out(updated).model_dump(by_alias=True), trace_id=request.state.trace_id)
 
 
 @router.get("/me/favorites")

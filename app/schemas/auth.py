@@ -20,6 +20,7 @@ class LoginIn(ApiModel):
 class UserOut(ApiModel):
     id: int
     phone: str
+    email: str | None = None
     nickname: str
     avatarUrl: str | None = None
     role: Literal["USER", "COACH", "ADMIN"]
@@ -47,4 +48,26 @@ class UserPatchIn(ApiModel):
 
 class ChangePasswordIn(ApiModel):
     old_password: str = Field(min_length=1, max_length=64)
+    new_password: str = Field(min_length=8, max_length=64)
+
+
+class EmailCodeIn(ApiModel):
+    email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=255)
+    purpose: Literal["LOGIN", "RESET", "BIND"]
+
+
+class EmailLoginIn(ApiModel):
+    email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=255)
+    code: str = Field(pattern=r"^\d{6}$")
+
+
+class EmailBindIn(ApiModel):
+    email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=255)
+    code: str = Field(pattern=r"^\d{6}$")
+    purpose: Literal["BIND"]
+
+
+class ResetPasswordIn(ApiModel):
+    email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=255)
+    code: str = Field(pattern=r"^\d{6}$")
     new_password: str = Field(min_length=8, max_length=64)

@@ -19,6 +19,7 @@ class User(Base):
     __tablename__ = "users"
     __table_args__ = (
         UniqueConstraint("phone", name="uq_users_phone"),
+        UniqueConstraint("email", name="uq_users_email"),
         Index("idx_users_role_status", "role", "status"),
         CheckConstraint(
             "role IN ('USER','COACH','ADMIN')",
@@ -32,6 +33,7 @@ class User(Base):
 
     id = Column(BIGINT(unsigned=True), primary_key=True, autoincrement=True)
     phone = Column(String(20), nullable=False, comment="手机号，唯一")
+    email = Column(String(255), nullable=True, comment="邮箱，唯一（可空）")
     password_hash = Column(String(255), nullable=False, comment="bcrypt 哈希")
     nickname = Column(String(32), nullable=False, comment="昵称")
     avatar_url = Column(String(512), nullable=True, comment="头像")
