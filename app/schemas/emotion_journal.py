@@ -29,3 +29,16 @@ class EmotionTrendOut(ApiModel):
     days: int
     items: list[EmotionTrendDayOut]
     summary: dict[str, int]
+
+
+class EmotionCalendarDayOut(ApiModel):
+    date: str
+    moods: dict[str, int]
+    count: int
+
+
+class EmotionCalendarOut(ApiModel):
+    year: int
+    month: int
+    days: list[EmotionCalendarDayOut]
+    summary: dict[str, int]

@@ -67,3 +67,24 @@ def test_journal_trend(client, auth_headers):
 
     resp = client.get("/api/v1/emotion-journals/trend?days=3", headers=auth_headers)
     assert resp.status_code == 400
+
+
+def test_journal_calendar(client, auth_headers):
+    for mood in ("CALM", "ANXIOUS"):
+        resp = client.post(
+            "/api/v1/emotion-journals",
+            headers=auth_headers,
+            json={"moodType": mood, "content": f"月历测试-{mood}"},
+        )
+        assert resp.status_code == 201
+
+    resp = client.get("/api/v1/emotion-journals/calendar", headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert 28 <= len(data["days"]) <= 31
+    assert sum(day["count"] for day in data["days"]) >= 2
+    assert data["summary"]["CALM"] >= 1
+    assert data["summary"]["ANXIOUS"] >= 1
+
+    resp = client.get("/api/v1/emotion-journals/calendar?month=2026-13", headers=auth_headers)
+    assert resp.status_code == 400

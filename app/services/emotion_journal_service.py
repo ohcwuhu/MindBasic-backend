@@ -1,5 +1,6 @@
 """情绪日记业务逻辑（异步）。"""
 
+import calendar as cal_mod
 import random
 from datetime import timedelta
 
@@ -88,3 +89,29 @@ async def journals_trend(db: AsyncSession, user_id: int, days: int) -> dict:
             summary[mood] = summary.get(mood, 0) + count
         cursor += timedelta(days=1)
     return {"days": days, "items": items, "summary": summary}
+
+
+async def journals_calendar(db: AsyncSession, user_id: int, year: int, month: int) -> dict:
+    """按天聚合某月情绪分布（数据库本地日期），返回整月逐日 + 当月汇总。"""
+    day_col = func.date(EmotionJournal.created_at).label("day")
+    rows = (
+        await db.execute(
+            select(day_col, EmotionJournal.mood_type, func.count().label("cnt"))
+            .where(EmotionJournal.user_id == user_id)
+            .group_by(day_col, EmotionJournal.mood_type)
+        )
+    ).all()
+    buckets: dict[str, dict[str, int]] = {}
+    for day, mood, count in rows:
+        buckets.setdefault(str(day), {})[mood] = int(count)
+
+    _, last_day = cal_mod.monthrange(year, month)
+    days: list[dict] = []
+    summary: dict[str, int] = {mood: 0 for mood in MOOD_ORDER}
+    for day in range(1, last_day + 1):
+        key = f"{year:04d}-{month:02d}-{day:02d}"
+        moods = buckets.get(key, {})
+        days.append({"date": key, "moods": moods, "count": sum(moods.values())})
+        for mood, count in moods.items():
+            summary[mood] = summary.get(mood, 0) + count
+    return {"year": year, "month": month, "days": days, "summary": summary}

@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -6,10 +8,16 @@ from app.api.deps import get_async_db, get_current_user
 from app.api.response import ok, paginated
 from app.models.growth import EmotionJournal
 from app.models.user import User
-from app.schemas.emotion_journal import EmotionJournalIn, EmotionJournalOut, EmotionTrendOut
+from app.schemas.emotion_journal import (
+    EmotionCalendarOut,
+    EmotionJournalIn,
+    EmotionJournalOut,
+    EmotionTrendOut,
+)
 from app.services.emotion_journal_service import (
     count_journals,
     journals_trend,
+    journals_calendar,
     get_own_journal_or_404,
     journal_to_out,
     pick_feedback,
@@ -71,6 +79,24 @@ async def journal_trend(
 ) -> dict:
     return ok(
         EmotionTrendOut(**await journals_trend(db, user.id, days)).model_dump(by_alias=True),
+        trace_id=request.state.trace_id,
+    )
+
+
+@router.get("/calendar")
+async def journal_calendar(
+    request: Request,
+    month: str | None = Query(default=None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$"),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+) -> dict:
+    if month:
+        year, mon = (int(part) for part in month.split("-"))
+    else:
+        now = datetime.now()
+        year, mon = now.year, now.month
+    return ok(
+        EmotionCalendarOut(**await journals_calendar(db, user.id, year, mon)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
     )
 
