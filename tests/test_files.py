@@ -25,7 +25,7 @@ def test_upload_ok_and_invalid_type(client, auth_headers):
         "/api/v1/files",
         headers=auth_headers,
         files={"file": ("cert.png", PNG_BYTES, "image/png")},
-        data={"usage": "credential"},
+        data={"usage": "general"},
     )
     assert resp.status_code == 201
     data = resp.json()["data"]
@@ -42,6 +42,25 @@ def test_upload_ok_and_invalid_type(client, auth_headers):
     )
     assert resp.status_code == 400
     assert resp.json()["code"] == "FILE_TYPE_INVALID"
+
+    resp = client.post(
+        "/api/v1/files",
+        headers=auth_headers,
+        files={"file": ("a.png", PNG_BYTES, "image/png")},
+        data={"usage": "avatar"},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "VALIDATION_ERROR"
+
+    # 证书也应标记为私有（仅本人与管理员可访问）
+    resp = client.post(
+        "/api/v1/files",
+        headers=auth_headers,
+        files={"file": ("cert.png", PNG_BYTES, "image/png")},
+        data={"usage": "credential"},
+    )
+    assert resp.status_code == 201
+    assert resp.json()["data"]["isPrivate"] is True
 
 
 def test_private_file_access_control(client, auth_headers, admin_headers):

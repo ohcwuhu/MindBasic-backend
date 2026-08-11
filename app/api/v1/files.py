@@ -24,6 +24,7 @@ ALLOWED_TYPES = {
     "application/pdf": ".pdf",
 }
 MAX_SIZE = 5 * 1024 * 1024  # 5MB
+ALLOWED_USAGES = {"general", "credential", "idcard"}
 
 router = APIRouter(prefix="/files", tags=["files"])
 
@@ -37,6 +38,8 @@ async def upload_file(
     db: Session = Depends(get_db),
 ) -> dict:
     content_type = file.content_type or ""
+    if usage not in ALLOWED_USAGES:
+        raise AppError(400, "VALIDATION_ERROR", "usage 仅支持 general/credential/idcard")
     if content_type not in ALLOWED_TYPES:
         raise AppError(400, "FILE_TYPE_INVALID", "仅支持 JPG/PNG/WebP/PDF 文件")
     data = await file.read()
@@ -49,7 +52,7 @@ async def upload_file(
     filename = f"{uuid.uuid4().hex}{ALLOWED_TYPES[content_type]}"
     path = UPLOAD_DIR / filename
     path.write_bytes(data)
-    is_private = usage == "idcard"
+    is_private = usage in ("idcard", "credential")
     record = FileUpload(
         file_id=filename,
         user_id=user.id,
