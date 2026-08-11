@@ -134,12 +134,16 @@ async def admin_users(
     keyword: str | None = Query(default=None, max_length=50),
     role: str | None = Query(default=None, pattern="^(USER|COACH|ADMIN)$"),
     status: str | None = Query(default=None, pattern="^(ENABLED|DISABLED)$"),
+    createdFrom: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$", alias="createdFrom"),
+    createdTo: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$", alias="createdTo"),
     page: int = Query(default=1, ge=1),
     pageSize: int = Query(default=10, ge=1, le=50, alias="pageSize"),
     admin: User = Depends(require_role("ADMIN")),
     db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    rows, total = await admin_service.list_users(db, keyword, role, status, page, pageSize)
+    rows, total = await admin_service.list_users(
+        db, keyword, role, status, createdFrom, createdTo, page, pageSize
+    )
     items = [AdminUserOut(**admin_service.user_to_admin_out(u)).model_dump(by_alias=True) for u in rows]
     return ok(paginated(items, total, page, pageSize), trace_id=request.state.trace_id)
 

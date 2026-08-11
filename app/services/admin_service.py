@@ -43,7 +43,14 @@ def write_admin_log(
 
 
 async def list_users(
-    db: AsyncSession, keyword: str | None, role: str | None, status: str | None, page: int, page_size: int
+    db: AsyncSession,
+    keyword: str | None,
+    role: str | None,
+    status: str | None,
+    created_from: str | None,
+    created_to: str | None,
+    page: int,
+    page_size: int,
 ) -> tuple[list[User], int]:
     stmt = select(User).where(User.deleted_at.is_(None))
     if keyword:
@@ -52,6 +59,12 @@ async def list_users(
         stmt = stmt.where(User.role == role)
     if status:
         stmt = stmt.where(User.status == status)
+    if created_from:
+        start = datetime.combine(datetime.strptime(created_from, "%Y-%m-%d").date(), time.min)
+        stmt = stmt.where(User.created_at >= start)
+    if created_to:
+        end = datetime.combine(datetime.strptime(created_to, "%Y-%m-%d").date(), time.max)
+        stmt = stmt.where(User.created_at <= end)
     total = await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = list(
         await db.scalars(
