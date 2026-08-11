@@ -41,12 +41,14 @@ from app.services.coach_service import (
     profile_to_out,
     replace_coach_slots,
     save_platform_phrase,
+    service_to_out,
     submit_audit,
     update_client_remark,
     update_phrase,
     update_service,
     update_profile,
 )
+from app.utils.format import mask_phone
 from app.utils.time import to_iso
 from app.services.appointment_service import (
     cancel_coach_appointment,
@@ -135,15 +137,7 @@ def coach_services(
     from app.services.coach_service import get_coach_services
 
     items = [
-        ServiceOut(**{
-            "id": s.id,
-            "name": s.name,
-            "service_type": s.service_type,
-            "duration_min": s.duration_min,
-            "price_in_cents": s.price_in_cents,
-            "description": s.description,
-            "is_enabled": bool(s.is_enabled),
-        }).model_dump(by_alias=True)
+        ServiceOut(**service_to_out(s)).model_dump(by_alias=True)
         for s in get_coach_services(db, coach.id)
     ]
     return ok({"items": items}, trace_id=request.state.trace_id)
@@ -158,15 +152,7 @@ def coach_create_service(
 ) -> dict:
     service = create_service(db, coach.id, body)
     return ok(
-        ServiceOut(
-            id=service.id,
-            name=service.name,
-            service_type=service.service_type,
-            duration_min=service.duration_min,
-            price_in_cents=service.price_in_cents,
-            description=service.description,
-            is_enabled=True,
-        ).model_dump(by_alias=True),
+        ServiceOut(**service_to_out(service)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
     )
 
@@ -181,15 +167,7 @@ def coach_update_service(
 ) -> dict:
     service = update_service(db, coach.id, service_id, body)
     return ok(
-        ServiceOut(
-            id=service.id,
-            name=service.name,
-            service_type=service.service_type,
-            duration_min=service.duration_min,
-            price_in_cents=service.price_in_cents,
-            description=service.description,
-            is_enabled=bool(service.is_enabled),
-        ).model_dump(by_alias=True),
+        ServiceOut(**service_to_out(service)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
     )
 
@@ -259,8 +237,6 @@ def coach_clients(
     db: Session = Depends(get_db),
 ) -> dict:
     rows, total = list_clients(db, coach.id, keyword, page, pageSize)
-    from app.services.auth_service import mask_phone
-
     items = [
         ClientOut(
             id=relation.id,
@@ -272,7 +248,7 @@ def coach_clients(
         ).model_dump(by_alias=True)
         for relation, user in rows
     ]
-    return ok({"items": items, "pagination": {"page": page, "pageSize": pageSize, "totalItems": total, "totalPages": max(1, (total + pageSize - 1) // pageSize), "hasMore": page * pageSize < total}}, trace_id=request.state.trace_id)
+    return ok(paginated(items, total, page, pageSize), trace_id=request.state.trace_id)
 
 
 @router.patch("/clients/{relation_id}")

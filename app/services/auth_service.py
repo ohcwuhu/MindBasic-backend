@@ -15,15 +15,10 @@ from app.core.security import (
 )
 from app.models.user import RefreshToken, User
 from app.schemas.auth import UserOut
+from app.utils.format import mask_phone
 from app.utils.time import utcnow_naive
 
 REFRESH_COOKIE = "refresh_token"
-
-
-def mask_phone(phone: str) -> str:
-    if len(phone) == 11:
-        return phone[:3] + "****" + phone[-4:]
-    return phone
 
 
 def to_user_out(user: User) -> UserOut:

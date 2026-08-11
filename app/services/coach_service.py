@@ -55,6 +55,19 @@ def get_coach_services(db: Session, coach_id: int) -> list[Service]:
     )
 
 
+def service_to_out(service: Service) -> dict:
+    """服务项目统一序列化。"""
+    return {
+        "id": service.id,
+        "name": service.name,
+        "service_type": service.service_type,
+        "duration_min": service.duration_min,
+        "price_in_cents": service.price_in_cents,
+        "description": service.description,
+        "is_enabled": bool(service.is_enabled),
+    }
+
+
 def validate_tags(db: Session, tag_ids: list[int]) -> list[Tag]:
     if not tag_ids:
         return []
@@ -465,18 +478,7 @@ def profile_to_out(db: Session, profile: CoachProfile) -> dict:
         "service_concept": profile.service_concept,
         "years_of_experience": profile.years_of_experience,
         "tags": [{"id": t.id, "name": t.name, "type": t.type} for t in tags],
-        "services": [
-            {
-                "id": s.id,
-                "name": s.name,
-                "service_type": s.service_type,
-                "duration_min": s.duration_min,
-                "price_in_cents": s.price_in_cents,
-                "description": s.description,
-                "is_enabled": bool(s.is_enabled),
-            }
-            for s in services
-        ],
+        "services": [service_to_out(s) for s in services],
         "credential_urls": profile.credential_urls or [],
         "id_card_url": profile.id_card_url,
         "audit_status": profile.audit_status,

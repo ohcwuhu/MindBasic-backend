@@ -14,6 +14,7 @@ from app.models.user import User
 from app.models.v1_1 import ClientRelation
 from app.models.v1_1 import Review
 from app.services.notification_service import notify
+from app.utils.format import mask_phone
 from app.schemas.appointment import AppointmentCreateIn
 from app.utils.time import to_iso, utcnow_naive
 
@@ -275,8 +276,6 @@ def coach_appointment_to_out(db: Session, appointment: Appointment) -> dict:
     user = db.get(User, appointment.user_id)
     service = db.get(Service, appointment.service_id)
     slot = db.get(CoachSlot, appointment.slot_id)
-    from app.services.auth_service import mask_phone
-
     return {
         "id": appointment.id,
         "appointment_no": appointment.appointment_no,
@@ -316,8 +315,6 @@ def coach_appointments_to_out(db: Session, appointments: list[Appointment]) -> l
     users = {u.id: u for u in db.scalars(select(User).where(User.id.in_(user_ids)))}
     services = {s.id: s for s in db.scalars(select(Service).where(Service.id.in_(service_ids)))}
     slots = {s.id: s for s in db.scalars(select(CoachSlot).where(CoachSlot.id.in_(slot_ids)))}
-
-    from app.services.auth_service import mask_phone
 
     items: list[dict] = []
     for a in appointments:

@@ -5,7 +5,7 @@ from app.api.deps import get_db, require_role
 from app.api.response import ok, paginated
 from app.models.user import User
 from app.schemas.coach import AuditListOut, AuditOut, AuditRejectIn
-from app.services.auth_service import mask_phone
+from app.utils.format import mask_phone
 from app.services.coach_service import (
     approve_audit,
     get_audit_or_404,
