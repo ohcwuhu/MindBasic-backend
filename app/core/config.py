@@ -6,10 +6,9 @@ class Settings(BaseSettings):
 
     app_name: str = "MindBasic"
     debug: bool = False
-    database_url: str = (
-        "mysql+pymysql://mindbasic:MindBasic%402026@127.0.0.1:3306/mindbasic?charset=utf8mb4"
-    )
-    jwt_secret_key: str = "change-me-in-production"
+    # 不提供默认凭据：必须由环境变量 / .env 提供，缺失则启动失败
+    database_url: str = ""
+    jwt_secret_key: str = ""
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 120
     refresh_token_expire_days: int = 14
@@ -24,6 +23,29 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def _validate_settings() -> None:
+    """启动前校验关键配置，避免生产环境使用弱默认值。"""
+    problems: list[str] = []
+    if not settings.database_url:
+        problems.append("DATABASE_URL 未配置")
+    if not settings.jwt_secret_key or settings.jwt_secret_key.lower() in {
+        "change-me-in-production",
+        "changeme",
+        "secret",
+    }:
+        problems.append("JWT_SECRET_KEY 未配置或仍为占位值")
+    if not settings.debug:
+        if not settings.cookie_secure:
+            problems.append("生产环境（DEBUG=false）必须设置 COOKIE_SECURE=true")
+        if settings.cors_origins == "http://localhost:5173,http://127.0.0.1:5173":
+            problems.append("生产环境请显式配置 CORS_ORIGINS")
+    if problems:
+        raise RuntimeError("配置校验失败：\n- " + "\n- ".join(problems))
+
+
+_validate_settings()
 
 
 def cors_origin_list() -> list[str]:
