@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_coach, get_current_user, get_db
+from app.api.deps import get_async_db, get_current_coach, get_current_user
 from app.api.response import ok, paginated
 from app.models.coach import CoachProfile
 from app.models.user import User
@@ -72,55 +72,55 @@ router = APIRouter(prefix="/coach", tags=["coach"])
 
 
 @router.post("/profile", status_code=201)
-def submit_profile(
+async def submit_profile(
     body: CoachProfileIn,
     request: Request,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    profile = create_profile(db, user, body)
+    profile = await create_profile(db, user, body)
     return ok(
-        CoachProfileOut(**profile_to_out(db, profile)).model_dump(by_alias=True),
+        CoachProfileOut(**await profile_to_out(db, profile)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
     )
 
 
 @router.get("/profile")
-def get_profile(
+async def get_profile(
     request: Request,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    profile = get_profile_or_404(db, user.id)
+    profile = await get_profile_or_404(db, user.id)
     return ok(
-        CoachProfileOut(**profile_to_out(db, profile)).model_dump(by_alias=True),
+        CoachProfileOut(**await profile_to_out(db, profile)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
     )
 
 
 @router.patch("/profile")
-def patch_profile(
+async def patch_profile(
     body: CoachProfilePatchIn,
     request: Request,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    profile = update_profile(db, user, body)
+    profile = await update_profile(db, user, body)
     return ok(
-        CoachProfileOut(**profile_to_out(db, profile)).model_dump(by_alias=True),
+        CoachProfileOut(**await profile_to_out(db, profile)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
     )
 
 
 @router.post("/profile/submit-audit")
-def resubmit_audit(
+async def resubmit_audit(
     request: Request,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    profile = submit_audit(db, user)
+    profile = await submit_audit(db, user)
     return ok(
-        CoachProfileOut(**profile_to_out(db, profile)).model_dump(by_alias=True),
+        CoachProfileOut(**await profile_to_out(db, profile)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
     )
 
@@ -129,28 +129,28 @@ def resubmit_audit(
 
 
 @router.get("/services")
-def coach_services(
+async def coach_services(
     request: Request,
     coach: CoachProfile = Depends(get_current_coach),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
     from app.services.coach_service import get_coach_services
 
     items = [
         ServiceOut(**service_to_out(s)).model_dump(by_alias=True)
-        for s in get_coach_services(db, coach.id)
+        for s in await get_coach_services(db, coach.id)
     ]
     return ok({"items": items}, trace_id=request.state.trace_id)
 
 
 @router.post("/services", status_code=201)
-def coach_create_service(
+async def coach_create_service(
     body: ServiceIn,
     request: Request,
     coach: CoachProfile = Depends(get_current_coach),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    service = create_service(db, coach.id, body)
+    service = await create_service(db, coach.id, body)
     return ok(
         ServiceOut(**service_to_out(service)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
@@ -158,14 +158,14 @@ def coach_create_service(
 
 
 @router.patch("/services/{service_id}")
-def coach_update_service(
+async def coach_update_service(
     service_id: int,
     body: ServicePatchIn,
     request: Request,
     coach: CoachProfile = Depends(get_current_coach),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    service = update_service(db, coach.id, service_id, body)
+    service = await update_service(db, coach.id, service_id, body)
     return ok(
         ServiceOut(**service_to_out(service)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
@@ -176,18 +176,18 @@ def coach_update_service(
 
 
 @router.get("/slots")
-def coach_slots(
+async def coach_slots(
     request: Request,
     startDate: str = Query(default="", alias="startDate"),
     endDate: str = Query(default="", alias="endDate"),
     coach: CoachProfile = Depends(get_current_coach),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
     from datetime import date, timedelta
 
     start = startDate or date.today().isoformat()
     end = endDate or (date.today() + timedelta(days=14)).isoformat()
-    slots = list_coach_slots(db, coach.id, start, end)
+    slots = await list_coach_slots(db, coach.id, start, end)
     items = [
         SlotOut(
             id=s.id,
@@ -203,13 +203,13 @@ def coach_slots(
 
 
 @router.put("/slots")
-def coach_replace_slots(
+async def coach_replace_slots(
     body: SlotBatchIn,
     request: Request,
     coach: CoachProfile = Depends(get_current_coach),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    slots = replace_coach_slots(db, coach.id, body)
+    slots = await replace_coach_slots(db, coach.id, body)
     items = [
         SlotOut(
             id=s.id,
@@ -228,15 +228,15 @@ def coach_replace_slots(
 
 
 @router.get("/clients")
-def coach_clients(
+async def coach_clients(
     request: Request,
     keyword: str | None = Query(default=None, max_length=32),
     page: int = Query(default=1, ge=1),
     pageSize: int = Query(default=10, ge=1, le=50, alias="pageSize"),
     coach: CoachProfile = Depends(get_current_coach),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    rows, total = list_clients(db, coach.id, keyword, page, pageSize)
+    rows, total = await list_clients(db, coach.id, keyword, page, pageSize)
     items = [
         ClientOut(
             id=relation.id,
@@ -252,14 +252,14 @@ def coach_clients(
 
 
 @router.patch("/clients/{relation_id}")
-def coach_update_client(
+async def coach_update_client(
     relation_id: int,
     body: ClientPatchIn,
     request: Request,
     coach: CoachProfile = Depends(get_current_coach),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    relation = update_client_remark(db, coach.id, relation_id, body.remark)
+    relation = await update_client_remark(db, coach.id, relation_id, body.remark)
     return ok({"id": relation.id, "remark": relation.remark}, trace_id=request.state.trace_id)
 
 
@@ -267,10 +267,10 @@ def coach_update_client(
 
 
 @router.get("/phrases")
-def coach_phrases_endpoint(
+async def coach_phrases_endpoint(
     request: Request,
     coach: CoachProfile = Depends(get_current_coach),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
     items = [
         PhraseOut(
@@ -280,19 +280,19 @@ def coach_phrases_endpoint(
             source=p.source,
             created_at=to_iso(p.created_at),
         ).model_dump(by_alias=True)
-        for p in my_phrases(db, coach.id)
+        for p in await my_phrases(db, coach.id)
     ]
     return ok({"items": items}, trace_id=request.state.trace_id)
 
 
 @router.post("/phrases", status_code=201)
-def coach_create_phrase_endpoint(
+async def coach_create_phrase_endpoint(
     body: PhraseIn,
     request: Request,
     coach: CoachProfile = Depends(get_current_coach),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    phrase = create_phrase(db, coach.id, body.category, body.content)
+    phrase = await create_phrase(db, coach.id, body.category, body.content)
     return ok(
         PhraseOut(
             id=phrase.id,
@@ -306,13 +306,13 @@ def coach_create_phrase_endpoint(
 
 
 @router.post("/phrases/save", status_code=201)
-def coach_save_phrase(
+async def coach_save_phrase(
     body: SavePhraseIn,
     request: Request,
     coach: CoachProfile = Depends(get_current_coach),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    phrase = save_platform_phrase(db, coach.id, body.phrase_id)
+    phrase = await save_platform_phrase(db, coach.id, body.phrase_id)
     return ok(
         PhraseOut(
             id=phrase.id,
@@ -326,14 +326,14 @@ def coach_save_phrase(
 
 
 @router.patch("/phrases/{phrase_id}")
-def coach_update_phrase_endpoint(
+async def coach_update_phrase_endpoint(
     phrase_id: int,
     body: PhrasePatchIn,
     request: Request,
     coach: CoachProfile = Depends(get_current_coach),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    phrase = update_phrase(db, coach.id, phrase_id, body.category, body.content)
+    phrase = await update_phrase(db, coach.id, phrase_id, body.category, body.content)
     return ok(
         PhraseOut(
             id=phrase.id,
@@ -347,28 +347,28 @@ def coach_update_phrase_endpoint(
 
 
 @router.delete("/phrases/{phrase_id}", status_code=204)
-def coach_delete_phrase_endpoint(
+async def coach_delete_phrase_endpoint(
     phrase_id: int,
     request: Request,
     coach: CoachProfile = Depends(get_current_coach),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> None:
-    delete_phrase(db, coach.id, phrase_id)
+    await delete_phrase(db, coach.id, phrase_id)
 
 
 phrase_library_router = APIRouter(prefix="/phrase-library", tags=["phrase-library"])
 
 
 @phrase_library_router.get("")
-def platform_phrases_endpoint(
+async def platform_phrases_endpoint(
     request: Request,
     category: str | None = Query(default=None, pattern="^(OPENING|RESOURCE|FUTURE|ACTION|OTHER)$"),
     coach: CoachProfile = Depends(get_current_coach),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
     items = [
         {"id": p.id, "category": p.category, "content": p.content}
-        for p in list_platform_phrases(db, category)
+        for p in await list_platform_phrases(db, category)
     ]
     return ok({"items": items}, trace_id=request.state.trace_id)
 
@@ -377,28 +377,28 @@ def platform_phrases_endpoint(
 
 
 @router.get("/appointments")
-def coach_appointments(
+async def coach_appointments(
     request: Request,
     status: str | None = Query(default=None, pattern="^(PENDING|CONFIRMED|COMPLETED|CANCELLED)$"),
     date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     page: int = Query(default=1, ge=1),
     pageSize: int = Query(default=10, ge=1, le=50, alias="pageSize"),
     coach: CoachProfile = Depends(get_current_coach),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    rows, total = list_coach_appointments(db, coach.id, status, date, page, pageSize)
-    items = [CoachAppointmentOut(**item).model_dump(by_alias=True) for item in coach_appointments_to_out(db, rows)]
+    rows, total = await list_coach_appointments(db, coach.id, status, date, page, pageSize)
+    items = [CoachAppointmentOut(**item).model_dump(by_alias=True) for item in await coach_appointments_to_out(db, rows)]
     return ok(paginated(items, total, page, pageSize), trace_id=request.state.trace_id)
 
 
 @router.post("/appointments/{appointment_id}/confirm")
-def coach_confirm(
+async def coach_confirm(
     appointment_id: int,
     request: Request,
     coach: CoachProfile = Depends(get_current_coach),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    appointment = confirm_appointment(db, coach.id, appointment_id)
+    appointment = await confirm_appointment(db, coach.id, appointment_id)
     return ok(
         AppointmentStatusOut(id=appointment.id, status=appointment.status).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
@@ -406,14 +406,14 @@ def coach_confirm(
 
 
 @router.post("/appointments/{appointment_id}/cancel")
-def coach_cancel(
+async def coach_cancel(
     appointment_id: int,
     body: CancelAppointmentIn,
     request: Request,
     coach: CoachProfile = Depends(get_current_coach),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    appointment = cancel_coach_appointment(db, coach.id, appointment_id, body.cancel_reason, coach.user_id)
+    appointment = await cancel_coach_appointment(db, coach.id, appointment_id, body.cancel_reason, coach.user_id)
     return ok(
         AppointmentStatusOut(
             id=appointment.id,
@@ -425,13 +425,13 @@ def coach_cancel(
 
 
 @router.post("/appointments/{appointment_id}/complete")
-def coach_complete(
+async def coach_complete(
     appointment_id: int,
     request: Request,
     coach: CoachProfile = Depends(get_current_coach),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    appointment = complete_appointment(db, coach.id, appointment_id)
+    appointment = await complete_appointment(db, coach.id, appointment_id)
     return ok(
         AppointmentStatusOut(
             id=appointment.id,
@@ -446,70 +446,70 @@ def coach_complete(
 
 
 @router.get("/cases/stats")
-def coach_case_stats(
+async def coach_case_stats(
     request: Request,
     coach: CoachProfile = Depends(get_current_coach),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
     return ok(
-        CaseStatsOut(**case_stats(db, coach.id)).model_dump(by_alias=True),
+        CaseStatsOut(**await case_stats(db, coach.id)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
     )
 
 
 @router.get("/cases")
-def coach_cases(
+async def coach_cases(
     request: Request,
     keyword: str | None = Query(default=None, max_length=32),
     page: int = Query(default=1, ge=1),
     pageSize: int = Query(default=10, ge=1, le=50, alias="pageSize"),
     coach: CoachProfile = Depends(get_current_coach),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    rows, total = list_cases(db, coach.id, keyword, page, pageSize)
+    rows, total = await list_cases(db, coach.id, keyword, page, pageSize)
     items = [CaseRecordOut(**case_to_out(r)).model_dump(by_alias=True) for r in rows]
     return ok(paginated(items, total, page, pageSize), trace_id=request.state.trace_id)
 
 
 @router.post("/cases", status_code=201)
-def coach_create_case(
+async def coach_create_case(
     body: CaseRecordIn,
     request: Request,
     coach: CoachProfile = Depends(get_current_coach),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    record = create_case(db, coach.id, body)
+    record = await create_case(db, coach.id, body)
     return ok(CaseRecordOut(**case_to_out(record)).model_dump(by_alias=True), trace_id=request.state.trace_id)
 
 
 @router.get("/cases/{case_id}")
-def coach_case_detail(
+async def coach_case_detail(
     case_id: int,
     request: Request,
     coach: CoachProfile = Depends(get_current_coach),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    record = get_own_case_or_404(db, coach.id, case_id)
+    record = await get_own_case_or_404(db, coach.id, case_id)
     return ok(CaseRecordOut(**case_to_out(record)).model_dump(by_alias=True), trace_id=request.state.trace_id)
 
 
 @router.patch("/cases/{case_id}")
-def coach_update_case(
+async def coach_update_case(
     case_id: int,
     body: CaseRecordPatchIn,
     request: Request,
     coach: CoachProfile = Depends(get_current_coach),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    record = update_case(db, coach.id, case_id, body)
+    record = await update_case(db, coach.id, case_id, body)
     return ok(CaseRecordOut(**case_to_out(record)).model_dump(by_alias=True), trace_id=request.state.trace_id)
 
 
 @router.delete("/cases/{case_id}", status_code=204)
-def coach_delete_case(
+async def coach_delete_case(
     case_id: int,
     request: Request,
     coach: CoachProfile = Depends(get_current_coach),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> None:
-    delete_case(db, coach.id, case_id)
+    await delete_case(db, coach.id, case_id)

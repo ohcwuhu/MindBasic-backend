@@ -1,6 +1,7 @@
 """教练入驻与审核业务逻辑。"""
 
 from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import AppError
@@ -23,20 +24,20 @@ from datetime import date as date_type
 from datetime import datetime
 
 
-def get_profile_by_user(db: Session, user_id: int) -> CoachProfile | None:
-    return db.scalar(select(CoachProfile).where(CoachProfile.user_id == user_id))
+async def get_profile_by_user(db: AsyncSession, user_id: int) -> CoachProfile | None:
+    return await db.scalar(select(CoachProfile).where(CoachProfile.user_id == user_id))
 
 
-def get_profile_or_404(db: Session, user_id: int) -> CoachProfile:
-    profile = get_profile_by_user(db, user_id)
+async def get_profile_or_404(db: AsyncSession, user_id: int) -> CoachProfile:
+    profile = await get_profile_by_user(db, user_id)
     if profile is None:
         raise AppError(404, "NOT_FOUND", "请先提交教练入驻资料")
     return profile
 
 
-def get_coach_tags(db: Session, coach_id: int) -> list[Tag]:
+async def get_coach_tags(db: AsyncSession, coach_id: int) -> list[Tag]:
     return list(
-        db.scalars(
+        await db.scalars(
             select(Tag)
             .join(CoachTag, CoachTag.tag_id == Tag.id)
             .where(CoachTag.coach_id == coach_id)
@@ -45,9 +46,9 @@ def get_coach_tags(db: Session, coach_id: int) -> list[Tag]:
     )
 
 
-def get_coach_services(db: Session, coach_id: int) -> list[Service]:
+async def get_coach_services(db: AsyncSession, coach_id: int) -> list[Service]:
     return list(
-        db.scalars(
+        await db.scalars(
             select(Service)
             .where(Service.coach_id == coach_id)
             .order_by(Service.id.asc())
@@ -68,16 +69,16 @@ def service_to_out(service: Service) -> dict:
     }
 
 
-def validate_tags(db: Session, tag_ids: list[int]) -> list[Tag]:
+async def validate_tags(db: AsyncSession, tag_ids: list[int]) -> list[Tag]:
     if not tag_ids:
         return []
-    tags = list(db.scalars(select(Tag).where(Tag.id.in_(tag_ids), Tag.is_enabled.is_(True))))
+    tags = list(await db.scalars(select(Tag).where(Tag.id.in_(tag_ids), Tag.is_enabled.is_(True))))
     if len(tags) != len(set(tag_ids)):
         raise AppError(400, "VALIDATION_ERROR", "包含无效的标签")
     return tags
 
 
-def create_services(db: Session, coach_id: int, services: list[ServiceIn]) -> None:
+async def create_services(db: AsyncSession, coach_id: int, services: list[ServiceIn]) -> None:
     for item in services:
         db.add(Service(
             coach_id=coach_id,
@@ -90,8 +91,8 @@ def create_services(db: Session, coach_id: int, services: list[ServiceIn]) -> No
         ))
 
 
-def get_own_service_or_404(db: Session, coach_profile_id: int, service_id: int) -> Service:
-    service = db.scalar(
+async def get_own_service_or_404(db: AsyncSession, coach_profile_id: int, service_id: int) -> Service:
+    service = await db.scalar(
         select(Service).where(Service.id == service_id, Service.coach_id == coach_profile_id)
     )
     if service is None:
@@ -99,7 +100,7 @@ def get_own_service_or_404(db: Session, coach_profile_id: int, service_id: int) 
     return service
 
 
-def create_service(db: Session, coach_profile_id: int, data: ServiceIn) -> Service:
+async def create_service(db: AsyncSession, coach_profile_id: int, data: ServiceIn) -> Service:
     service = Service(
         coach_id=coach_profile_id,
         name=data.name.strip(),
@@ -110,19 +111,19 @@ def create_service(db: Session, coach_profile_id: int, data: ServiceIn) -> Servi
         is_enabled=True,
     )
     db.add(service)
-    db.commit()
-    db.refresh(service)
+    await db.commit()
+    await db.refresh(service)
     return service
 
 
-def update_service(db: Session, coach_profile_id: int, service_id: int, data: ServicePatchIn) -> Service:
-    service = get_own_service_or_404(db, coach_profile_id, service_id)
+async def update_service(db: AsyncSession, coach_profile_id: int, service_id: int, data: ServicePatchIn) -> Service:
+    service = await get_own_service_or_404(db, coach_profile_id, service_id)
     changes = data.model_dump(exclude_unset=True, exclude_none=True)
     for field in ("name", "service_type", "duration_min", "price_in_cents", "description", "is_enabled"):
         if field in changes:
             setattr(service, field, changes[field])
-    db.commit()
-    db.refresh(service)
+    await db.commit()
+    await db.refresh(service)
     return service
 
 
@@ -130,7 +131,7 @@ def parse_slot_time(value: str):
     return datetime.strptime(value, "%H:%M").time()
 
 
-def list_coach_slots(db: Session, coach_profile_id: int, start_date: str, end_date: str) -> list:
+async def list_coach_slots(db: AsyncSession, coach_profile_id: int, start_date: str, end_date: str) -> list:
     try:
         start = date_type.fromisoformat(start_date)
         end = date_type.fromisoformat(end_date)
@@ -141,7 +142,7 @@ def list_coach_slots(db: Session, coach_profile_id: int, start_date: str, end_da
     from app.models.coach import CoachSlot
 
     return list(
-        db.scalars(
+        await db.scalars(
             select(CoachSlot)
             .where(
                 CoachSlot.coach_id == coach_profile_id,
@@ -153,7 +154,7 @@ def list_coach_slots(db: Session, coach_profile_id: int, start_date: str, end_da
     )
 
 
-def replace_coach_slots(db: Session, coach_profile_id: int, data: SlotBatchIn) -> list:
+async def replace_coach_slots(db: AsyncSession, coach_profile_id: int, data: SlotBatchIn) -> list:
     """按日期范围整体替换可管理时段：删除 AVAILABLE/OFF，保留 BOOKED。"""
     from app.models.coach import CoachSlot
 
@@ -174,7 +175,7 @@ def replace_coach_slots(db: Session, coach_profile_id: int, data: SlotBatchIn) -
         parsed.append((d, start, end))
 
     dates = {d for d, _, _ in parsed}
-    db.execute(
+    await db.execute(
         CoachSlot.__table__.delete().where(
             CoachSlot.coach_id == coach_profile_id,
             CoachSlot.date.in_(dates),
@@ -183,7 +184,7 @@ def replace_coach_slots(db: Session, coach_profile_id: int, data: SlotBatchIn) -
     )
     booked_keys = {
         (row.date, row.start_time)
-        for row in db.scalars(
+        for row in await db.scalars(
             select(CoachSlot).where(
                 CoachSlot.coach_id == coach_profile_id,
                 CoachSlot.date.in_(dates),
@@ -201,8 +202,8 @@ def replace_coach_slots(db: Session, coach_profile_id: int, data: SlotBatchIn) -
             end_time=end,
             status="AVAILABLE",
         ))
-    db.commit()
-    return list_coach_slots(
+    await db.commit()
+    return await list_coach_slots(
         db, coach_profile_id, min(dates).isoformat(), max(dates).isoformat()
     )
 
@@ -210,8 +211,8 @@ def replace_coach_slots(db: Session, coach_profile_id: int, data: SlotBatchIn) -
 # ---------- 客户管理 ----------
 
 
-def list_clients(
-    db: Session, coach_profile_id: int, keyword: str | None, page: int, page_size: int
+async def list_clients(
+    db: AsyncSession, coach_profile_id: int, keyword: str | None, page: int, page_size: int
 ) -> tuple[list[tuple[ClientRelation, User]], int]:
     stmt = (
         select(ClientRelation, User)
@@ -220,19 +221,19 @@ def list_clients(
     )
     if keyword:
         stmt = stmt.where(User.nickname.like(f"%{keyword}%"))
-    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-    rows = db.execute(
+    total = await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    rows = (await db.execute(
         stmt.order_by(ClientRelation.last_appointment_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
-    ).all()
+    )).all()
     return rows, total
 
 
-def update_client_remark(
-    db: Session, coach_profile_id: int, relation_id: int, remark: str | None
+async def update_client_remark(
+    db: AsyncSession, coach_profile_id: int, relation_id: int, remark: str | None
 ) -> ClientRelation:
-    relation = db.scalar(
+    relation = await db.scalar(
         select(ClientRelation).where(
             ClientRelation.id == relation_id,
             ClientRelation.coach_id == coach_profile_id,
@@ -241,15 +242,15 @@ def update_client_remark(
     if relation is None:
         raise AppError(404, "NOT_FOUND", "客户记录不存在")
     relation.remark = remark
-    db.commit()
-    db.refresh(relation)
+    await db.commit()
+    await db.refresh(relation)
     return relation
 
 
 # ---------- 话术库 ----------
 
 
-def list_platform_phrases(db: Session, category: str | None) -> list[PlatformPhrase]:
+async def list_platform_phrases(db: AsyncSession, category: str | None) -> list[PlatformPhrase]:
     stmt = (
         select(PlatformPhrase)
         .where(PlatformPhrase.is_enabled.is_(True))
@@ -257,12 +258,12 @@ def list_platform_phrases(db: Session, category: str | None) -> list[PlatformPhr
     )
     if category:
         stmt = stmt.where(PlatformPhrase.category == category)
-    return list(db.scalars(stmt))
+    return list(await db.scalars(stmt))
 
 
-def my_phrases(db: Session, coach_profile_id: int) -> list[CoachPhrase]:
+async def my_phrases(db: AsyncSession, coach_profile_id: int) -> list[CoachPhrase]:
     return list(
-        db.scalars(
+        await db.scalars(
             select(CoachPhrase)
             .where(CoachPhrase.coach_id == coach_profile_id)
             .order_by(CoachPhrase.updated_at.desc())
@@ -270,8 +271,8 @@ def my_phrases(db: Session, coach_profile_id: int) -> list[CoachPhrase]:
     )
 
 
-def get_own_phrase_or_404(db: Session, coach_profile_id: int, phrase_id: int) -> CoachPhrase:
-    phrase = db.scalar(
+async def get_own_phrase_or_404(db: AsyncSession, coach_profile_id: int, phrase_id: int) -> CoachPhrase:
+    phrase = await db.scalar(
         select(CoachPhrase).where(
             CoachPhrase.id == phrase_id,
             CoachPhrase.coach_id == coach_profile_id,
@@ -282,7 +283,7 @@ def get_own_phrase_or_404(db: Session, coach_profile_id: int, phrase_id: int) ->
     return phrase
 
 
-def create_phrase(db: Session, coach_profile_id: int, category: str, content: str) -> CoachPhrase:
+async def create_phrase(db: AsyncSession, coach_profile_id: int, category: str, content: str) -> CoachPhrase:
     phrase = CoachPhrase(
         coach_id=coach_profile_id,
         category=category,
@@ -290,35 +291,35 @@ def create_phrase(db: Session, coach_profile_id: int, category: str, content: st
         source="custom",
     )
     db.add(phrase)
-    db.commit()
-    db.refresh(phrase)
+    await db.commit()
+    await db.refresh(phrase)
     return phrase
 
 
-def update_phrase(
-    db: Session, coach_profile_id: int, phrase_id: int, category: str | None, content: str | None
+async def update_phrase(
+    db: AsyncSession, coach_profile_id: int, phrase_id: int, category: str | None, content: str | None
 ) -> CoachPhrase:
-    phrase = get_own_phrase_or_404(db, coach_profile_id, phrase_id)
+    phrase = await get_own_phrase_or_404(db, coach_profile_id, phrase_id)
     if category:
         phrase.category = category
     if content:
         phrase.content = content.strip()
-    db.commit()
-    db.refresh(phrase)
+    await db.commit()
+    await db.refresh(phrase)
     return phrase
 
 
-def delete_phrase(db: Session, coach_profile_id: int, phrase_id: int) -> None:
-    phrase = get_own_phrase_or_404(db, coach_profile_id, phrase_id)
-    db.delete(phrase)
-    db.commit()
+async def delete_phrase(db: AsyncSession, coach_profile_id: int, phrase_id: int) -> None:
+    phrase = await get_own_phrase_or_404(db, coach_profile_id, phrase_id)
+    await db.delete(phrase)
+    await db.commit()
 
 
-def save_platform_phrase(db: Session, coach_profile_id: int, phrase_id: int) -> CoachPhrase:
-    platform = db.get(PlatformPhrase, phrase_id)
+async def save_platform_phrase(db: AsyncSession, coach_profile_id: int, phrase_id: int) -> CoachPhrase:
+    platform = await db.get(PlatformPhrase, phrase_id)
     if platform is None or not platform.is_enabled:
         raise AppError(404, "NOT_FOUND", "平台话术不存在")
-    duplicate = db.scalar(
+    duplicate = await db.scalar(
         select(CoachPhrase.id).where(
             CoachPhrase.coach_id == coach_profile_id,
             CoachPhrase.content == platform.content,
@@ -334,8 +335,8 @@ def save_platform_phrase(db: Session, coach_profile_id: int, phrase_id: int) -> 
         source="saved",
     )
     db.add(phrase)
-    db.commit()
-    db.refresh(phrase)
+    await db.commit()
+    await db.refresh(phrase)
     return phrase
 
 
@@ -362,9 +363,9 @@ def build_snapshot(profile: CoachProfile, tags: list[Tag], services: list[Servic
     }
 
 
-def create_audit_record(db: Session, profile: CoachProfile, version: int) -> CoachAudit:
-    tags = get_coach_tags(db, profile.id)
-    services = get_coach_services(db, profile.id)
+async def create_audit_record(db: AsyncSession, profile: CoachProfile, version: int) -> CoachAudit:
+    tags = await get_coach_tags(db, profile.id)
+    services = await get_coach_services(db, profile.id)
     audit = CoachAudit(
         coach_id=profile.id,
         submit_version=version,
@@ -376,10 +377,10 @@ def create_audit_record(db: Session, profile: CoachProfile, version: int) -> Coa
     return audit
 
 
-def create_profile(db: Session, user: User, data: CoachProfileIn) -> CoachProfile:
-    if get_profile_by_user(db, user.id) is not None:
+async def create_profile(db: AsyncSession, user: User, data: CoachProfileIn) -> CoachProfile:
+    if await get_profile_by_user(db, user.id) is not None:
         raise AppError(409, "CONFLICT", "已存在教练资料，请勿重复提交")
-    tags = validate_tags(db, data.tag_ids)
+    tags = await validate_tags(db, data.tag_ids)
     profile = CoachProfile(
         user_id=user.id,
         real_name=data.real_name,
@@ -394,17 +395,17 @@ def create_profile(db: Session, user: User, data: CoachProfileIn) -> CoachProfil
         review_count=0,
     )
     db.add(profile)
-    db.flush()  # 取得 profile.id
+    await db.flush()  # 取得 profile.id
     db.add_all(CoachTag(coach_id=profile.id, tag_id=t.id) for t in tags)
-    create_services(db, profile.id, data.services)
-    create_audit_record(db, profile, version=1)
-    db.commit()
-    db.refresh(profile)
+    await create_services(db, profile.id, data.services)
+    await create_audit_record(db, profile, version=1)
+    await db.commit()
+    await db.refresh(profile)
     return profile
 
 
-def update_profile(db: Session, user: User, data: CoachProfilePatchIn) -> CoachProfile:
-    profile = get_profile_or_404(db, user.id)
+async def update_profile(db: AsyncSession, user: User, data: CoachProfilePatchIn) -> CoachProfile:
+    profile = await get_profile_or_404(db, user.id)
     changes = data.model_dump(exclude_unset=True, exclude_none=True)
     if not changes:
         return profile
@@ -425,46 +426,46 @@ def update_profile(db: Session, user: User, data: CoachProfilePatchIn) -> CoachP
         profile.id_card_url = changes["id_card_url"]
 
     if "tag_ids" in changes:
-        tags = validate_tags(db, changes["tag_ids"])
-        db.execute(CoachTag.__table__.delete().where(CoachTag.coach_id == profile.id))
+        tags = await validate_tags(db, changes["tag_ids"])
+        await db.execute(CoachTag.__table__.delete().where(CoachTag.coach_id == profile.id))
         db.add_all(CoachTag(coach_id=profile.id, tag_id=t.id) for t in tags)
 
     # 审核通过后的资料修改需要重新审核
     if profile.audit_status == "APPROVED":
-        latest = latest_audit_version(db, profile.id)
+        latest = await latest_audit_version(db, profile.id)
         profile.audit_status = "PENDING"
-        create_audit_record(db, profile, version=latest + 1)
+        await create_audit_record(db, profile, version=latest + 1)
 
-    db.commit()
-    db.refresh(profile)
+    await db.commit()
+    await db.refresh(profile)
     return profile
 
 
-def latest_audit_version(db: Session, coach_id: int) -> int:
-    return db.scalar(
+async def latest_audit_version(db: AsyncSession, coach_id: int) -> int:
+    return await db.scalar(
         select(func.max(CoachAudit.submit_version)).where(CoachAudit.coach_id == coach_id)
     ) or 0
 
 
-def submit_audit(db: Session, user: User) -> CoachProfile:
-    profile = get_profile_or_404(db, user.id)
+async def submit_audit(db: AsyncSession, user: User) -> CoachProfile:
+    profile = await get_profile_or_404(db, user.id)
     if profile.audit_status == "APPROVED":
         raise AppError(409, "INVALID_STATE_TRANSITION", "已审核通过，无需重新提交")
     if profile.audit_status == "PENDING":
         raise AppError(409, "INVALID_STATE_TRANSITION", "资料审核中，请勿重复提交")
     # REJECTED → 重新提交
     profile.audit_status = "PENDING"
-    version = latest_audit_version(db, profile.id) + 1
-    create_audit_record(db, profile, version=version)
-    db.commit()
-    db.refresh(profile)
+    version = await latest_audit_version(db, profile.id) + 1
+    await create_audit_record(db, profile, version=version)
+    await db.commit()
+    await db.refresh(profile)
     return profile
 
 
-def profile_to_out(db: Session, profile: CoachProfile) -> dict:
-    tags = get_coach_tags(db, profile.id)
-    services = get_coach_services(db, profile.id)
-    latest = db.scalar(
+async def profile_to_out(db: AsyncSession, profile: CoachProfile) -> dict:
+    tags = await get_coach_tags(db, profile.id)
+    services = await get_coach_services(db, profile.id)
+    latest = await db.scalar(
         select(CoachAudit)
         .where(CoachAudit.coach_id == profile.id)
         .order_by(CoachAudit.submit_version.desc())

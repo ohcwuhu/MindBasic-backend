@@ -1,7 +1,7 @@
 """个案记录业务逻辑。"""
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppError
 from app.models.coach import Appointment, CaseRecord
@@ -9,8 +9,8 @@ from app.schemas.case import CaseRecordIn, CaseRecordPatchIn
 from app.utils.time import to_iso
 
 
-def get_own_case_or_404(db: Session, coach_profile_id: int, case_id: int) -> CaseRecord:
-    record = db.scalar(
+async def get_own_case_or_404(db: AsyncSession, coach_profile_id: int, case_id: int) -> CaseRecord:
+    record = await db.scalar(
         select(CaseRecord).where(
             CaseRecord.id == case_id,
             CaseRecord.coach_id == coach_profile_id,
@@ -21,9 +21,9 @@ def get_own_case_or_404(db: Session, coach_profile_id: int, case_id: int) -> Cas
     return record
 
 
-def create_case(db: Session, coach_profile_id: int, data: CaseRecordIn) -> CaseRecord:
+async def create_case(db: AsyncSession, coach_profile_id: int, data: CaseRecordIn) -> CaseRecord:
     if data.appointment_id is not None:
-        appointment = db.scalar(
+        appointment = await db.scalar(
             select(Appointment).where(
                 Appointment.id == data.appointment_id,
                 Appointment.coach_id == coach_profile_id,
@@ -33,7 +33,7 @@ def create_case(db: Session, coach_profile_id: int, data: CaseRecordIn) -> CaseR
             raise AppError(404, "APPOINTMENT_NOT_FOUND", "预约记录不存在")
         if appointment.status != "COMPLETED":
             raise AppError(400, "INVALID_STATE_TRANSITION", "仅可为已完成预约创建个案记录")
-        duplicate = db.scalar(
+        duplicate = await db.scalar(
             select(CaseRecord.id).where(CaseRecord.appointment_id == data.appointment_id)
         )
         if duplicate is not None:
@@ -49,20 +49,20 @@ def create_case(db: Session, coach_profile_id: int, data: CaseRecordIn) -> CaseR
         duration_min=data.duration_min,
     )
     db.add(record)
-    db.commit()
-    db.refresh(record)
+    await db.commit()
+    await db.refresh(record)
     return record
 
 
-def list_cases(
-    db: Session, coach_profile_id: int, keyword: str | None, page: int, page_size: int
+async def list_cases(
+    db: AsyncSession, coach_profile_id: int, keyword: str | None, page: int, page_size: int
 ) -> tuple[list[CaseRecord], int]:
     stmt = select(CaseRecord).where(CaseRecord.coach_id == coach_profile_id)
     if keyword:
         stmt = stmt.where(CaseRecord.client_nickname.like(f"%{keyword}%"))
-    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    total = await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = list(
-        db.scalars(
+        await db.scalars(
             stmt.order_by(CaseRecord.created_at.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
@@ -71,10 +71,10 @@ def list_cases(
     return rows, total
 
 
-def update_case(
-    db: Session, coach_profile_id: int, case_id: int, data: CaseRecordPatchIn
+async def update_case(
+    db: AsyncSession, coach_profile_id: int, case_id: int, data: CaseRecordPatchIn
 ) -> CaseRecord:
-    record = get_own_case_or_404(db, coach_profile_id, case_id)
+    record = await get_own_case_or_404(db, coach_profile_id, case_id)
     changes = data.model_dump(exclude_unset=True, exclude_none=True)
     for field in (
         "client_nickname",
@@ -85,26 +85,26 @@ def update_case(
     ):
         if field in changes:
             setattr(record, field, changes[field])
-    db.commit()
-    db.refresh(record)
+    await db.commit()
+    await db.refresh(record)
     return record
 
 
-def delete_case(db: Session, coach_profile_id: int, case_id: int) -> None:
-    record = get_own_case_or_404(db, coach_profile_id, case_id)
-    db.delete(record)
-    db.commit()
+async def delete_case(db: AsyncSession, coach_profile_id: int, case_id: int) -> None:
+    record = await get_own_case_or_404(db, coach_profile_id, case_id)
+    await db.delete(record)
+    await db.commit()
 
 
-def case_stats(db: Session, coach_profile_id: int) -> dict:
+async def case_stats(db: AsyncSession, coach_profile_id: int) -> dict:
     total_cases = (
-        db.scalar(
+        await db.scalar(
             select(func.count()).select_from(CaseRecord).where(CaseRecord.coach_id == coach_profile_id)
         )
         or 0
     )
     service_minutes = (
-        db.scalar(
+        await db.scalar(
             select(func.coalesce(func.sum(CaseRecord.duration_min), 0)).where(
                 CaseRecord.coach_id == coach_profile_id
             )
@@ -112,7 +112,7 @@ def case_stats(db: Session, coach_profile_id: int) -> dict:
         or 0
     )
     client_count = (
-        db.scalar(
+        await db.scalar(
             select(func.count(func.distinct(CaseRecord.client_nickname))).where(
                 CaseRecord.coach_id == coach_profile_id,
                 CaseRecord.client_nickname.is_not(None),
