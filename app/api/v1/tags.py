@@ -2,9 +2,9 @@
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db
+from app.api.deps import get_async_db
 from app.api.response import ok
 from app.models.coach import Tag
 
@@ -12,10 +12,10 @@ router = APIRouter(prefix="/tags", tags=["tags"])
 
 
 @router.get("")
-def list_tags(
+async def list_tags(
     request: Request,
     type: str | None = Query(default=None, pattern="^(FIELD|AUDIENCE)$"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
     stmt = (
         select(Tag)
@@ -24,8 +24,9 @@ def list_tags(
     )
     if type:
         stmt = stmt.where(Tag.type == type)
+    tags = await db.scalars(stmt)
     items = [
         {"id": t.id, "name": t.name, "type": t.type}
-        for t in db.scalars(stmt)
+        for t in tags
     ]
     return ok({"items": items}, trace_id=request.state.trace_id)
