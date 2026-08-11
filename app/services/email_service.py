@@ -27,7 +27,11 @@ def send_email(to: str, subject: str, text: str) -> None:
     msg["Subject"] = subject
     msg["From"] = settings.smtp_from
     msg["To"] = to
-    with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
+    if settings.smtp_port == 465:
+        server = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port)
+    else:
+        server = smtplib.SMTP(settings.smtp_host, settings.smtp_port)
         server.starttls()
+    with server:
         server.login(settings.smtp_user, settings.smtp_password)
         server.sendmail(settings.smtp_from, [to], msg.as_string())
