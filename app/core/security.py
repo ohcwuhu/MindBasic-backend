@@ -52,3 +52,17 @@ def generate_refresh_token() -> str:
 def hash_refresh_token(token: str) -> str:
     """Refresh Token 只存 SHA-256 哈希。"""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def blacklist_access_token(token: str) -> None:
+    """将 Access Token 加入黑名单（按其 jti 与过期时间）。"""
+    try:
+        payload = decode_access_token(token)
+        jti = payload.get("jti")
+        exp = payload.get("exp")
+        if jti and exp:
+            from app.core.token_blacklist import blacklist_token
+
+            blacklist_token(jti, float(exp))
+    except jwt.InvalidTokenError:
+        pass

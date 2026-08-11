@@ -12,10 +12,16 @@ from app.models.user import User
 @pytest.fixture(autouse=True)
 def reset_rate_limits():
     from app.core.rate_limit import reset_rate_limits
+    from app.core.token_blacklist import reset_blacklist
+    from app.core.cache import reset_cache
 
     reset_rate_limits()
+    reset_blacklist()
+    reset_cache()
     yield
     reset_rate_limits()
+    reset_blacklist()
+    reset_cache()
 
 
 def unique_phone() -> str:

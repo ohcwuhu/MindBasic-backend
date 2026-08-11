@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.exceptions import AppError
 from app.core.security import decode_access_token
+from app.core.token_blacklist import is_blacklisted
 from app.db.session import SessionLocal
 from app.models.coach import CoachProfile
 from app.models.user import User
@@ -36,6 +37,8 @@ def get_current_user(
         raise AppError(401, "TOKEN_EXPIRED", "登录已过期，请刷新")
     except jwt.InvalidTokenError:
         raise AppError(401, "UNAUTHORIZED", "登录凭证无效")
+    if is_blacklisted(payload.get("jti", "")):
+        raise AppError(401, "TOKEN_EXPIRED", "登录已失效，请重新登录")
 
     try:
         user_id = int(payload["sub"])
@@ -60,6 +63,8 @@ def get_optional_user(
         return None
     try:
         payload = decode_access_token(credentials.credentials)
+        if is_blacklisted(payload.get("jti", "")):
+            return None
         user_id = int(payload["sub"])
     except (jwt.ExpiredSignatureError, jwt.InvalidTokenError, KeyError, TypeError, ValueError):
         return None

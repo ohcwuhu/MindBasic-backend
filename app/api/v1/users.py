@@ -1,5 +1,4 @@
-from fastapi import APIRouter, Depends, Request
-from fastapi import Query
+from fastapi import APIRouter, Depends, Header, Query, Request
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
@@ -12,8 +11,15 @@ from app.services.article_service import article_to_out, list_my_favorites
 from app.services.auth_service import to_user_out
 from app.services.checkin_service import my_badges
 from app.services.auth_service import change_password, deactivate_account
+from app.core.security import blacklist_access_token
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+
+def _bearer_token(authorization: str | None) -> str | None:
+    if authorization and authorization.lower().startswith("bearer "):
+        return authorization[7:]
+    return None
 
 
 @router.get("/me")
@@ -55,20 +61,28 @@ def my_favorites(
 def change_my_password(
     body: ChangePasswordIn,
     request: Request,
+    authorization: str | None = Header(default=None, alias="Authorization"),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict:
     change_password(db, user, body.old_password, body.new_password)
+    token = _bearer_token(authorization)
+    if token:
+        blacklist_access_token(token)
     return ok({"message": "密码已修改"}, trace_id=request.state.trace_id)
 
 
 @router.post("/me/deactivate")
 def deactivate_me(
     request: Request,
+    authorization: str | None = Header(default=None, alias="Authorization"),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict:
     deactivate_account(db, user)
+    token = _bearer_token(authorization)
+    if token:
+        blacklist_access_token(token)
     return ok({"message": "账号已注销"}, trace_id=request.state.trace_id)
 
 

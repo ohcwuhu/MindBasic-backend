@@ -229,10 +229,14 @@ def test_change_password_and_deactivate():
     )
     assert resp.status_code == 200
     assert client.post("/api/v1/auth/login", json={"phone": phone, "password": "OldPass123"}).status_code == 401
-    assert client.post("/api/v1/auth/login", json={"phone": phone, "password": "NewPass123"}).status_code == 200
+    new_login = client.post("/api/v1/auth/login", json={"phone": phone, "password": "NewPass123"})
+    assert new_login.status_code == 200
 
     # 注销后不可登录，手机号被释放可重新注册
-    resp = client.post("/api/v1/users/me/deactivate", headers=headers)
+    resp = client.post(
+        "/api/v1/users/me/deactivate",
+        headers={"Authorization": f"Bearer {new_login.json()['data']['accessToken']}"},
+    )
     assert resp.status_code == 200
     assert client.post("/api/v1/auth/login", json={"phone": phone, "password": "NewPass123"}).status_code == 401
     resp = client.post(
@@ -265,3 +269,29 @@ def test_login_rate_limit():
     )
     assert resp.status_code == 429
     assert resp.json()["code"] == "RATE_LIMITED"
+
+
+def test_access_token_blacklisted_after_password_change():
+    phone = unique_phone()
+    reg = client.post(
+        "/api/v1/auth/register",
+        json={"phone": phone, "password": "OldPass123", "nickname": "黑名单测试", "privacyAgreed": True},
+    )
+    assert reg.status_code == 201
+    token = reg.json()["data"]["accessToken"]
+    headers = {"Authorization": f"Bearer {token}"}
+    assert client.get("/api/v1/users/me", headers=headers).status_code == 200
+
+    resp = client.post(
+        "/api/v1/users/me/password",
+        headers=headers,
+        json={"oldPassword": "OldPass123", "newPassword": "NewPass123"},
+    )
+    assert resp.status_code == 200
+
+    resp = client.get("/api/v1/users/me", headers=headers)
+    assert resp.status_code == 401
+    assert resp.json()["code"] == "TOKEN_EXPIRED"
+
+    assert client.post("/api/v1/auth/login", json={"phone": phone, "password": "NewPass123"}).status_code == 200
+    delete_user_by_phone(phone)

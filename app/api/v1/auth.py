@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Header, Request, Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -6,7 +6,7 @@ from app.api.response import ok
 from app.core.config import settings
 from app.core.exceptions import AppError
 from app.core.rate_limit import rate_limit
-from app.core.security import create_access_token
+from app.core.security import blacklist_access_token, create_access_token
 from app.schemas.auth import AuthOut, LoginIn, RegisterIn, TokenOut
 from app.services.auth_service import (
     REFRESH_COOKIE,
@@ -95,9 +95,16 @@ def refresh(
 
 
 @router.post("/logout", status_code=204)
-def logout(request: Request, response: Response, db: Session = Depends(get_db)) -> Response:
+def logout(
+    request: Request,
+    response: Response,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    db: Session = Depends(get_db),
+) -> Response:
     raw_token = request.cookies.get(REFRESH_COOKIE)
     if raw_token:
         revoke_refresh_token(db, raw_token)
+    if authorization and authorization.lower().startswith("bearer "):
+        blacklist_access_token(authorization[7:])
     clear_refresh_cookie(response)
     return Response(status_code=204)
