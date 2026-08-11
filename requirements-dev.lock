@@ -18,6 +18,8 @@ anyio==4.14.2
     #   watchfiles
 bcrypt==5.0.0
     # via -r requirements.txt
+bleach==6.4.0
+    # via -r requirements.txt
 certifi==2026.7.22
     # via
     #   httpcore
@@ -115,5 +117,7 @@ uvicorn==0.52.1
     # via -r requirements.txt
 watchfiles==1.2.0
     # via uvicorn
+webencodings==0.5.1
+    # via bleach
 websockets==17.0.1
     # via uvicorn

@@ -11,3 +11,4 @@ python-dotenv>=1.0.0
 PyJWT>=2.8.0
 python-multipart>=0.0.9
 redis>=5.0.0
+bleach>=6.0.0

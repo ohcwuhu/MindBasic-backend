@@ -23,6 +23,7 @@ from app.schemas.admin import (
     TagPatchIn,
 )
 from app.services.content_guard import check_banned_words
+from app.services.content_sanitizer import sanitize_html
 from app.utils.time import to_iso, utcnow_naive
 
 
@@ -154,7 +155,7 @@ def create_article(db: Session, data: ArticleAdminIn) -> Article:
     article = Article(
         title=data.title.strip(),
         summary=data.summary,
-        content=data.content,
+        content=sanitize_html(data.content),
         cover_url=data.cover_url,
         category_id=data.category_id,
         is_pinned=data.is_pinned,
@@ -180,6 +181,8 @@ def update_article(db: Session, article_id: int, data: ArticleAdminPatchIn) -> A
     )
     for field in ("title", "summary", "content", "cover_url", "category_id", "is_pinned", "status"):
         if field in changes:
+            if field == "content":
+                changes[field] = sanitize_html(changes[field])
             setattr(article, field, changes[field])
     if changes.get("status") == "PUBLISHED" and article.published_at is None:
         article.published_at = utcnow_naive()

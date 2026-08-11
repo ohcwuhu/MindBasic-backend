@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.exceptions import AppError
 from app.models.content import Article, ArticleCategory, ArticleFavorite
+from app.services.content_sanitizer import sanitize_html
 from app.utils.time import to_iso
 
 
@@ -129,6 +130,6 @@ def article_to_out(article: Article, favorite_ids: set[int] | None = None) -> di
 
 def article_detail_to_out(article: Article, favorite_ids: set[int] | None = None) -> dict:
     data = article_to_out(article, favorite_ids)
-    data["content"] = article.content
+    data["content"] = sanitize_html(article.content)
     data["view_count"] = article.view_count
     return data

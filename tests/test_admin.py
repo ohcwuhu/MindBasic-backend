@@ -214,6 +214,34 @@ def test_admin_stats(client, admin_headers):
         assert key in data
 
 
+def test_article_content_sanitized(client, admin_headers):
+    resp = client.post(
+        "/api/v1/admin/articles",
+        headers=admin_headers,
+        json={
+            "title": "XSS 测试文章",
+            "content": "<p>安全内容</p><script>alert(1)</script><img src=x onerror=alert(1)>",
+            "status": "PUBLISHED",
+        },
+    )
+    assert resp.status_code == 201
+    content = resp.json()["data"]["content"]
+    assert "<script" not in content
+    assert "onerror" not in content
+    assert "<p>安全内容</p>" in content
+    article_id = resp.json()["data"]["id"]
+
+    resp = client.get(f"/api/v1/articles/{article_id}")
+    assert resp.status_code == 200
+    public_content = resp.json()["data"]["content"]
+    assert "<script" not in public_content
+    assert "onerror" not in public_content
+    assert "<p>安全内容</p>" in public_content
+
+    resp = client.delete(f"/api/v1/admin/articles/{article_id}", headers=admin_headers)
+    assert resp.status_code == 204
+
+
 def test_admin_requires_admin_role(client):
     phone = unique_phone()
     resp = client.post(
