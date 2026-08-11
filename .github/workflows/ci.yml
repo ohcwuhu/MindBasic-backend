@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: mindbasic
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DATABASE_URL: mysql+pymysql://root:root@127.0.0.1:3306/mindbasic?charset=utf8mb4
+      JWT_SECRET_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      DEBUG: "true"
+      COOKIE_SECURE: "false"
+      CORS_ORIGINS: http://localhost:5173
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+      - name: Install dependencies
+        run: pip install -r requirements-dev.lock
+      - name: Wait for MySQL
+        run: |
+          python - <<'EOF'
+          import socket, time
+          for _ in range(30):
+              try:
+                  socket.create_connection(("127.0.0.1", 3306), timeout=2).close()
+                  break
+              except OSError:
+                  time.sleep(1)
+          EOF
+      - name: Apply migrations
+        run: alembic upgrade head
+      - name: Run tests
+        run: pytest -q

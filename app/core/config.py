@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 14
     cookie_secure: bool = False
     log_level: str = "INFO"
+    rate_limit_backend: str = "memory"
+    redis_url: str = ""
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     model_config = SettingsConfigDict(

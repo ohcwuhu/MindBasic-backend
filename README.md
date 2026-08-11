@@ -16,6 +16,8 @@ alembic upgrade head                  # 建表
 uvicorn app.main:app --reload         # 启动开发服务
 ```
 
+生产/CI 建议使用锁定依赖安装：`pip install -r requirements.lock`（开发含测试依赖用 `requirements-dev.lock`）。
+
 ## 目录
 
 - `app/`：应用代码（core 配置、db 会话、models、API 路由）
