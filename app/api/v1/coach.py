@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
+from urllib.parse import quote
+from datetime import datetime
 
 from app.api.deps import get_async_db, get_current_coach, get_current_user
 from app.api.response import ok, paginated
@@ -61,9 +63,11 @@ from app.services.appointment_service import (
 from app.services.case_record_service import (
     case_stats,
     case_to_out,
+    cases_to_csv,
     create_case,
     delete_case,
     get_own_case_or_404,
+    list_all_cases,
     list_cases,
     update_case,
 )
@@ -454,6 +458,21 @@ async def coach_case_stats(
     return ok(
         CaseStatsOut(**await case_stats(db, coach.id)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
+    )
+
+
+@router.get("/cases/export")
+async def coach_cases_export(
+    request: Request,
+    coach: CoachProfile = Depends(get_current_coach),
+    db: AsyncSession = Depends(get_async_db),
+) -> Response:
+    records = await list_all_cases(db, coach.id)
+    filename = f"个案记录_{datetime.now().strftime('%Y%m%d')}.csv"
+    return Response(
+        content=cases_to_csv(records),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"},
     )
 
 

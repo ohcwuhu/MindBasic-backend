@@ -1,5 +1,8 @@
 """个案记录业务逻辑。"""
 
+import csv
+import io
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -69,6 +72,39 @@ async def list_cases(
         )
     )
     return rows, total
+
+
+async def list_all_cases(
+    db: AsyncSession, coach_profile_id: int, limit: int = 10000
+) -> list[CaseRecord]:
+    """导出用：一次取该教练全部个案（按时间倒序，上限防内存失控）。"""
+    return list(
+        await db.scalars(
+            select(CaseRecord)
+            .where(CaseRecord.coach_id == coach_profile_id)
+            .order_by(CaseRecord.created_at.desc())
+            .limit(limit)
+        )
+    )
+
+
+def cases_to_csv(records: list[CaseRecord]) -> str:
+    """构建 UTF-8 BOM CSV（Excel 兼容）。"""
+    buf = io.StringIO()
+    writer = csv.writer(buf, quoting=csv.QUOTE_MINIMAL)
+    writer.writerow(["个案编号", "客户称呼", "记录时间", "对话要点", "用户收获", "后续建议", "服务时长(分钟)", "关联预约ID"])
+    for record in records:
+        writer.writerow([
+            record.id,
+            record.client_nickname or "",
+            to_iso(record.created_at),
+            record.key_points or "",
+            record.user_gains or "",
+            record.followup_advice or "",
+            record.duration_min,
+            record.appointment_id or "",
+        ])
+    return "\ufeff" + buf.getvalue()
 
 
 async def update_case(

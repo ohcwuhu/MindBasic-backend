@@ -200,6 +200,15 @@ def test_case_records_flow(client, coach_env):
     assert stats["serviceMinutes"] == 120
     assert stats["clientCount"] == 2
 
+    resp = client.get("/api/v1/coach/cases/export", headers=coach_env["coach_headers"])
+    assert resp.status_code == 200
+    assert "text/csv" in resp.headers["content-type"]
+    content = resp.content.decode("utf-8-sig")
+    assert "个案编号" in content and "对话要点" in content
+    assert "小满" in content
+    assert "考前焦虑" in content
+    assert "小圆" in content
+
     resp = client.delete(f"/api/v1/coach/cases/{manual_id}", headers=coach_env["coach_headers"])
     assert resp.status_code == 204
 
