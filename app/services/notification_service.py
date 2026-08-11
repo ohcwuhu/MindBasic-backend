@@ -1,6 +1,7 @@
 """站内通知业务逻辑。"""
 
 from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import AppError
@@ -13,15 +14,15 @@ def notify(db: Session, user_id: int, type_: str, title: str, content: str) -> N
     db.add(Notification(user_id=user_id, type=type_, title=title, content=content, is_read=False))
 
 
-def list_notifications(
-    db: Session, user_id: int, unread_only: bool, page: int, page_size: int
+async def list_notifications(
+    db: AsyncSession, user_id: int, unread_only: bool, page: int, page_size: int
 ) -> tuple[list[Notification], int]:
     stmt = select(Notification).where(Notification.user_id == user_id)
     if unread_only:
         stmt = stmt.where(Notification.is_read.is_(False))
-    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    total = await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = list(
-        db.scalars(
+        await db.scalars(
             stmt.order_by(Notification.created_at.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
@@ -30,9 +31,9 @@ def list_notifications(
     return rows, total
 
 
-def unread_count(db: Session, user_id: int) -> int:
+async def unread_count(db: AsyncSession, user_id: int) -> int:
     return (
-        db.scalar(
+        await db.scalar(
             select(func.count()).select_from(Notification).where(
                 Notification.user_id == user_id,
                 Notification.is_read.is_(False),
@@ -42,24 +43,24 @@ def unread_count(db: Session, user_id: int) -> int:
     )
 
 
-def mark_read(db: Session, user_id: int, notification_id: int) -> None:
-    result = db.execute(
+async def mark_read(db: AsyncSession, user_id: int, notification_id: int) -> None:
+    result = await db.execute(
         update(Notification)
         .where(Notification.id == notification_id, Notification.user_id == user_id)
         .values(is_read=True)
     )
     if result.rowcount == 0:
         raise AppError(404, "NOT_FOUND", "通知不存在")
-    db.commit()
+    await db.commit()
 
 
-def mark_all_read(db: Session, user_id: int) -> int:
-    result = db.execute(
+async def mark_all_read(db: AsyncSession, user_id: int) -> int:
+    result = await db.execute(
         update(Notification)
         .where(Notification.user_id == user_id, Notification.is_read.is_(False))
         .values(is_read=True)
     )
-    db.commit()
+    await db.commit()
     return result.rowcount
 
 
