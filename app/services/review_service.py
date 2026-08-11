@@ -4,7 +4,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppError
-from app.models.coach import Appointment, CoachProfile
+from app.models.coach import Appointment, CoachProfile, CoachSlot, Service
 from app.models.user import User
 from app.models.v1_1 import Review
 from app.utils.time import to_iso
@@ -76,3 +76,38 @@ def review_to_out(review: Review, nickname: str) -> dict:
         "content": review.content,
         "created_at": to_iso(review.created_at),
     }
+
+
+async def coach_reviews_with_service(
+    db: AsyncSession, coach_id: int, page: int, page_size: int
+) -> tuple[list[dict], int]:
+    """教练端评价列表：附带服务项目与预约日期。"""
+    base = (
+        select(Review, User, Service, CoachSlot)
+        .join(User, User.id == Review.user_id)
+        .outerjoin(Appointment, Appointment.id == Review.appointment_id)
+        .outerjoin(Service, Service.id == Appointment.service_id)
+        .outerjoin(CoachSlot, CoachSlot.id == Appointment.slot_id)
+        .where(Review.coach_id == coach_id)
+    )
+    total = await db.scalar(select(func.count()).select_from(Review).where(Review.coach_id == coach_id)) or 0
+    rows = (
+        await db.execute(
+            base.order_by(Review.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).all()
+    items = []
+    for review, user, service, slot in rows:
+        items.append({
+            "id": review.id,
+            "appointment_id": review.appointment_id,
+            "nickname": user.nickname,
+            "rating": review.rating,
+            "content": review.content,
+            "service_name": service.name if service else None,
+            "service_date": slot.date.isoformat() if slot else None,
+            "created_at": to_iso(review.created_at),
+        })
+    return items, total

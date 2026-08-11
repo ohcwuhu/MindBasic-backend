@@ -16,3 +16,14 @@ class ReviewOut(ApiModel):
     rating: int
     content: str | None = None
     created_at: str
+
+
+class CoachReviewOut(ApiModel):
+    id: int
+    appointment_id: int | None = None
+    nickname: str
+    rating: int
+    content: str | None = None
+    service_name: str | None = None
+    service_date: str | None = None
+    created_at: str

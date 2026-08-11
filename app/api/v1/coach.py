@@ -29,6 +29,7 @@ from app.schemas.appointment import (
     CoachAppointmentOut,
 )
 from app.schemas.case import CaseRecordIn, CaseRecordOut, CaseRecordPatchIn, CaseStatsOut
+from app.schemas.review import CoachReviewOut
 from app.services.coach_service import (
     create_service,
     create_profile,
@@ -61,6 +62,7 @@ from app.services.appointment_service import (
     confirm_appointment,
     list_coach_appointments,
 )
+from app.services.review_service import coach_reviews_with_service
 from app.services.case_record_service import (
     case_stats,
     case_to_out,
@@ -393,6 +395,19 @@ async def coach_appointments(
 ) -> dict:
     rows, total = await list_coach_appointments(db, coach.id, status, date, page, pageSize)
     items = [CoachAppointmentOut(**item).model_dump(by_alias=True) for item in await coach_appointments_to_out(db, rows)]
+    return ok(paginated(items, total, page, pageSize), trace_id=request.state.trace_id)
+
+
+@router.get("/reviews")
+async def coach_reviews_endpoint(
+    request: Request,
+    page: int = Query(default=1, ge=1),
+    pageSize: int = Query(default=10, ge=1, le=50, alias="pageSize"),
+    coach: CoachProfile = Depends(get_current_coach),
+    db: AsyncSession = Depends(get_async_db),
+) -> dict:
+    rows, total = await coach_reviews_with_service(db, coach.id, page, pageSize)
+    items = [CoachReviewOut(**item).model_dump(by_alias=True) for item in rows]
     return ok(paginated(items, total, page, pageSize), trace_id=request.state.trace_id)
 
 

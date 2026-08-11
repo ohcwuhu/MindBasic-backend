@@ -144,6 +144,26 @@ def test_booking_confirm_complete(client, auth_headers, coach_env):
     assert resp.status_code == 200
     assert resp.json()["data"]["status"] == "COMPLETED"
 
+    # 用户评价后，教练端可查看
+    resp = client.post(
+        f"/api/v1/appointments/{appointment_id}/review",
+        headers=auth_headers,
+        json={"rating": 5, "content": "教练很耐心，收获很多"},
+    )
+    assert resp.status_code == 201
+
+    resp = client.get(
+        "/api/v1/coach/reviews?page=1&pageSize=10",
+        headers=coach_env["coach_headers"],
+    )
+    assert resp.status_code == 200
+    items = resp.json()["data"]["items"]
+    mine = next(item for item in items if item["appointmentId"] == appointment_id)
+    assert mine["rating"] == 5
+    assert "收获很多" in mine["content"]
+    assert mine["serviceName"] == "单次咨询"
+    assert mine["serviceDate"]
+
 
 def test_case_records_flow(client, coach_env):
     # 手动个案（无预约关联）
