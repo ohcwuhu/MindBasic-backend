@@ -6,9 +6,10 @@ from app.api.deps import get_async_db, get_current_user
 from app.api.response import ok, paginated
 from app.models.growth import EmotionJournal
 from app.models.user import User
-from app.schemas.emotion_journal import EmotionJournalIn, EmotionJournalOut
+from app.schemas.emotion_journal import EmotionJournalIn, EmotionJournalOut, EmotionTrendOut
 from app.services.emotion_journal_service import (
     count_journals,
+    journals_trend,
     get_own_journal_or_404,
     journal_to_out,
     pick_feedback,
@@ -59,6 +60,19 @@ async def list_journals(
     items = [EmotionJournalOut(**journal_to_out(j)).model_dump(by_alias=True) for j in journals]
     total = await count_journals(db, user.id)
     return ok(paginated(items, total, page, pageSize), trace_id=request.state.trace_id)
+
+
+@router.get("/trend")
+async def journal_trend(
+    request: Request,
+    days: int = Query(default=30, ge=7, le=90),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+) -> dict:
+    return ok(
+        EmotionTrendOut(**await journals_trend(db, user.id, days)).model_dump(by_alias=True),
+        trace_id=request.state.trace_id,
+    )
 
 
 @router.delete("/{journal_id}", status_code=204)

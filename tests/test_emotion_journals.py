@@ -40,3 +40,30 @@ def test_invalid_mood_type(client, auth_headers):
     )
     assert resp.status_code == 400
     assert resp.json()["code"] == "VALIDATION_ERROR"
+
+
+def test_journal_trend(client, auth_headers):
+    for mood in ("CALM", "CALM", "ANXIOUS"):
+        resp = client.post(
+            "/api/v1/emotion-journals",
+            headers=auth_headers,
+            json={"moodType": mood, "content": f"趋势测试-{mood}"},
+        )
+        assert resp.status_code == 201
+
+    resp = client.get("/api/v1/emotion-journals/trend?days=30", headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["days"] == 30
+    assert len(data["items"]) == 30
+    # 模块内同用户可能残留其他测试日记，用 >= 断言避免耦合
+    assert data["summary"]["CALM"] >= 2
+    assert data["summary"]["ANXIOUS"] >= 1
+    assert data["items"][-1]["moods"].get("CALM", 0) >= 2
+
+    resp = client.get("/api/v1/emotion-journals/trend?days=7", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["data"]["days"] == 7
+
+    resp = client.get("/api/v1/emotion-journals/trend?days=3", headers=auth_headers)
+    assert resp.status_code == 400
