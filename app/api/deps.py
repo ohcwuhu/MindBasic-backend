@@ -34,10 +34,10 @@ async def get_async_db():
         await db.close()
 
 
-def get_current_user(
+async def get_current_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> User:
     if credentials is None:
         raise AppError(401, "UNAUTHORIZED", "请先登录")
@@ -54,7 +54,7 @@ def get_current_user(
         user_id = int(payload["sub"])
     except (KeyError, TypeError, ValueError):
         raise AppError(401, "UNAUTHORIZED", "登录凭证无效")
-    user = db.get(User, user_id)
+    user = await db.get(User, user_id)
     if user is None or user.deleted_at is not None:
         raise AppError(401, "UNAUTHORIZED", "账号不存在")
     if user.status != "ENABLED":
@@ -63,10 +63,10 @@ def get_current_user(
     return user
 
 
-def get_optional_user(
+async def get_optional_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> User | None:
     """可选登录态：带有效 Token 返回用户，否则返回 None（不抛错）。"""
     if credentials is None:
@@ -78,19 +78,19 @@ def get_optional_user(
         user_id = int(payload["sub"])
     except (jwt.ExpiredSignatureError, jwt.InvalidTokenError, KeyError, TypeError, ValueError):
         return None
-    user = db.get(User, user_id)
+    user = await db.get(User, user_id)
     if user is None or user.deleted_at is not None or user.status != "ENABLED":
         return None
     request.state.user_id = user.id
     return user
 
 
-def get_current_coach(
+async def get_current_coach(
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> CoachProfile:
     """要求当前用户是已审核通过的教练，返回其教练资料。"""
-    profile = db.scalar(select(CoachProfile).where(CoachProfile.user_id == user.id))
+    profile = await db.scalar(select(CoachProfile).where(CoachProfile.user_id == user.id))
     if profile is None or profile.audit_status != "APPROVED":
         raise AppError(403, "COACH_NOT_APPROVED", "请先完成教练入驻并通过审核")
     return profile
@@ -99,7 +99,7 @@ def get_current_coach(
 def require_role(*roles: str):
     """返回一个依赖：要求当前用户属于指定角色。"""
 
-    def checker(user: User = Depends(get_current_user)) -> User:
+    async def checker(user: User = Depends(get_current_user)) -> User:
         if user.role not in roles:
             raise AppError(403, "FORBIDDEN", "无权访问该资源")
         return user

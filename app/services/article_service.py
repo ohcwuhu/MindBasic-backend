@@ -2,7 +2,6 @@
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
 
 from app.core.exceptions import AppError
 from app.models.content import Article, ArticleCategory, ArticleFavorite
@@ -93,8 +92,8 @@ async def toggle_favorite(db: AsyncSession, user_id: int, article_id: int) -> bo
     return True
 
 
-def list_my_favorites(
-    db: Session, user_id: int, page: int, page_size: int
+async def list_my_favorites(
+    db: AsyncSession, user_id: int, page: int, page_size: int
 ) -> tuple[list[Article], int]:
     base = (
         select(Article)
@@ -105,9 +104,9 @@ def list_my_favorites(
             Article.deleted_at.is_(None),
         )
     )
-    total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    total = await db.scalar(select(func.count()).select_from(base.subquery())) or 0
     rows = list(
-        db.scalars(
+        await db.scalars(
             base.order_by(ArticleFavorite.created_at.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)

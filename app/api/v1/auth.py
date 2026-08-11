@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Header, Request, Response
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_db
+from app.api.deps import get_async_db
 from app.api.response import ok
 from app.core.config import settings
 from app.core.exceptions import AppError
@@ -46,48 +46,48 @@ def get_refresh_token(request: Request) -> str:
 
 
 @router.post("/register", status_code=201)
-def register(
+async def register(
     body: RegisterIn,
     request: Request,
     response: Response,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _limiter: None = Depends(rate_limit("register", 5, 60)),
 ) -> dict:
-    user = register_user(db, body.phone, body.password, body.nickname, body.privacy_agreed)
+    user = await register_user(db, body.phone, body.password, body.nickname, body.privacy_agreed)
     access_token, expires_in = create_access_token(user.id, user.role)
-    refresh_token = issue_refresh_token(db, user)
+    refresh_token = await issue_refresh_token(db, user)
     set_refresh_cookie(response, refresh_token)
     payload = AuthOut(accessToken=access_token, expiresIn=expires_in, user=to_user_out(user))
     return ok(payload.model_dump(by_alias=True), trace_id=request.state.trace_id)
 
 
 @router.post("/login")
-def login(
+async def login(
     body: LoginIn,
     request: Request,
     response: Response,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _limiter: None = Depends(rate_limit("login", 10, 60)),
 ) -> dict:
-    user = authenticate_user(db, body.phone, body.password)
+    user = await authenticate_user(db, body.phone, body.password)
     user.last_login_at = utcnow_naive()
-    db.commit()
+    await db.commit()
     access_token, expires_in = create_access_token(user.id, user.role)
-    refresh_token = issue_refresh_token(db, user)
+    refresh_token = await issue_refresh_token(db, user)
     set_refresh_cookie(response, refresh_token)
     payload = AuthOut(accessToken=access_token, expiresIn=expires_in, user=to_user_out(user))
     return ok(payload.model_dump(by_alias=True), trace_id=request.state.trace_id)
 
 
 @router.post("/refresh")
-def refresh(
+async def refresh(
     request: Request,
     response: Response,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     _limiter: None = Depends(rate_limit("refresh", 20, 60)),
 ) -> dict:
     raw_token = get_refresh_token(request)
-    new_token, user = rotate_refresh_token(db, raw_token)
+    new_token, user = await rotate_refresh_token(db, raw_token)
     access_token, expires_in = create_access_token(user.id, user.role)
     set_refresh_cookie(response, new_token)
     payload = TokenOut(accessToken=access_token, expiresIn=expires_in)
@@ -95,15 +95,15 @@ def refresh(
 
 
 @router.post("/logout", status_code=204)
-def logout(
+async def logout(
     request: Request,
     response: Response,
     authorization: str | None = Header(default=None, alias="Authorization"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> Response:
     raw_token = request.cookies.get(REFRESH_COOKIE)
     if raw_token:
-        revoke_refresh_token(db, raw_token)
+        await revoke_refresh_token(db, raw_token)
     if authorization and authorization.lower().startswith("bearer "):
         blacklist_access_token(authorization[7:])
     clear_refresh_cookie(response)

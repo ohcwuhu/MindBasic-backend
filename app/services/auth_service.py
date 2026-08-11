@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.exceptions import AppError
@@ -36,15 +36,15 @@ def to_user_out(user: User) -> UserOut:
     )
 
 
-def get_user_by_phone(db: Session, phone: str) -> User | None:
+async def get_user_by_phone(db: AsyncSession, phone: str) -> User | None:
     stmt = select(User).where(User.phone == phone, User.deleted_at.is_(None))
-    return db.scalar(stmt)
+    return await db.scalar(stmt)
 
 
-def register_user(db: Session, phone: str, password: str, nickname: str, privacy_agreed: bool) -> User:
+async def register_user(db: AsyncSession, phone: str, password: str, nickname: str, privacy_agreed: bool) -> User:
     if not privacy_agreed:
         raise AppError(400, "VALIDATION_ERROR", "请先阅读并同意隐私政策")
-    if get_user_by_phone(db, phone) is not None:
+    if await get_user_by_phone(db, phone) is not None:
         raise AppError(409, "PHONE_EXISTS", "该手机号已注册")
     user = User(
         phone=phone,
@@ -55,13 +55,13 @@ def register_user(db: Session, phone: str, password: str, nickname: str, privacy
         privacy_agreed=True,
     )
     db.add(user)
-    db.commit()
-    db.refresh(user)
+    await db.commit()
+    await db.refresh(user)
     return user
 
 
-def authenticate_user(db: Session, phone: str, password: str) -> User:
-    user = get_user_by_phone(db, phone)
+async def authenticate_user(db: AsyncSession, phone: str, password: str) -> User:
+    user = await get_user_by_phone(db, phone)
     if user is None or not verify_password(password, user.password_hash):
         raise AppError(401, "CREDENTIAL_INVALID", "手机号或密码错误")
     if user.status != "ENABLED":
@@ -69,25 +69,25 @@ def authenticate_user(db: Session, phone: str, password: str) -> User:
     return user
 
 
-def issue_refresh_token(db: Session, user: User) -> str:
+async def issue_refresh_token(db: AsyncSession, user: User) -> str:
     token = generate_refresh_token()
     db.add(RefreshToken(
         user_id=user.id,
         token_hash=hash_refresh_token(token),
         expires_at=utcnow_naive() + timedelta(days=settings.refresh_token_expire_days),
     ))
-    db.commit()
+    await db.commit()
     return token
 
 
-def rotate_refresh_token(db: Session, raw_token: str) -> tuple[str, User]:
+async def rotate_refresh_token(db: AsyncSession, raw_token: str) -> tuple[str, User]:
     """校验并轮换 Refresh Token，返回 (新 token, 用户)；失败抛 401。"""
     token_hash = hash_refresh_token(raw_token)
-    record = db.scalar(select(RefreshToken).where(RefreshToken.token_hash == token_hash))
+    record = await db.scalar(select(RefreshToken).where(RefreshToken.token_hash == token_hash))
     now = utcnow_naive()
     if record is None or record.revoked_at is not None or record.expires_at < now:
         raise AppError(401, "UNAUTHORIZED", "登录状态已失效，请重新登录")
-    user = db.get(User, record.user_id)
+    user = await db.get(User, record.user_id)
     if user is None or user.deleted_at is not None or user.status != "ENABLED":
         raise AppError(401, "UNAUTHORIZED", "账号不可用，请重新登录")
 
@@ -98,38 +98,38 @@ def rotate_refresh_token(db: Session, raw_token: str) -> tuple[str, User]:
         token_hash=hash_refresh_token(new_token),
         expires_at=utcnow_naive() + timedelta(days=settings.refresh_token_expire_days),
     ))
-    db.commit()
+    await db.commit()
     return new_token, user
 
 
-def revoke_refresh_token(db: Session, raw_token: str) -> None:
-    record = db.scalar(select(RefreshToken).where(RefreshToken.token_hash == hash_refresh_token(raw_token)))
+async def revoke_refresh_token(db: AsyncSession, raw_token: str) -> None:
+    record = await db.scalar(select(RefreshToken).where(RefreshToken.token_hash == hash_refresh_token(raw_token)))
     if record is not None and record.revoked_at is None:
         record.revoked_at = utcnow_naive()
-        db.commit()
+        await db.commit()
 
 
-def change_password(db: Session, user: User, old_password: str, new_password: str) -> None:
+async def change_password(db: AsyncSession, user: User, old_password: str, new_password: str) -> None:
     if not verify_password(old_password, user.password_hash):
         raise AppError(401, "CREDENTIAL_INVALID", "原密码错误")
     user.password_hash = hash_password(new_password)
     now = utcnow_naive()
-    db.execute(
+    await db.execute(
         update(RefreshToken)
         .where(RefreshToken.user_id == user.id, RefreshToken.revoked_at.is_(None))
         .values(revoked_at=now)
     )
-    db.commit()
+    await db.commit()
 
 
-def deactivate_account(db: Session, user: User) -> None:
+async def deactivate_account(db: AsyncSession, user: User) -> None:
     """注销账号：软删除 + 释放手机号 + 吊销全部刷新令牌。"""
     user.deleted_at = utcnow_naive()
     user.phone = f"del_{user.id}"
     now = utcnow_naive()
-    db.execute(
+    await db.execute(
         update(RefreshToken)
         .where(RefreshToken.user_id == user.id, RefreshToken.revoked_at.is_(None))
         .values(revoked_at=now)
     )
-    db.commit()
+    await db.commit()
