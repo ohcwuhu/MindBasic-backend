@@ -14,6 +14,7 @@ from app.api.v1 import (
     coach,
     coaches,
     checkins,
+    communities,
     emotion_journals,
     files,
     growth_assessments,
@@ -135,6 +136,7 @@ app.include_router(tags.router, prefix="/api/v1")
 app.include_router(files.router, prefix="/api/v1")
 app.include_router(growth_assessments.router, prefix="/api/v1")
 app.include_router(checkins.router, prefix="/api/v1")
+app.include_router(communities.router, prefix="/api/v1")
 app.include_router(notifications.router, prefix="/api/v1")
 app.include_router(platform.router, prefix="/api/v1")
 app.include_router(articles.articles_router, prefix="/api/v1")
@@ -147,6 +149,7 @@ app.include_router(admin.tags_router, prefix="/api/v1")
 app.include_router(admin.feedback_router, prefix="/api/v1")
 app.include_router(admin.stats_router, prefix="/api/v1")
 app.include_router(admin.config_router, prefix="/api/v1")
+app.include_router(admin.communities_router, prefix="/api/v1")
 
 
 @app.get("/health", tags=["system"])

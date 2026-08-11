@@ -35,7 +35,9 @@ from app.schemas.admin import (
     UserStatusIn,
 )
 from app.schemas.system_config import SystemConfigUpdateIn
+from app.schemas.community import CommunityBriefOut, CommunityStatusIn
 from app.services import admin_service
+from app.services.community_service import admin_list_communities, admin_set_community_status
 from app.services.system_config_service import get_all_configs, update_configs
 
 router = APIRouter(prefix="/admin/coach-audits", tags=["admin-coach-audits"])
@@ -465,3 +467,33 @@ async def admin_update_system_configs(
         {"items": await update_configs(db, admin, items)},
         trace_id=request.state.trace_id,
     )
+
+
+communities_router = APIRouter(prefix="/admin/communities", tags=["admin-communities"])
+
+
+@communities_router.get("")
+async def admin_communities(
+    request: Request,
+    keyword: str | None = Query(default=None, max_length=32),
+    status: str | None = Query(default=None, pattern="^(ACTIVE|DISABLED)$"),
+    page: int = Query(default=1, ge=1),
+    pageSize: int = Query(default=10, ge=1, le=50, alias="pageSize"),
+    admin: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_async_db),
+) -> dict:
+    rows, total = await admin_list_communities(db, keyword, status, page, pageSize)
+    items = [CommunityBriefOut(**item).model_dump(by_alias=True) for item in rows]
+    return ok(paginated(items, total, page, pageSize), trace_id=request.state.trace_id)
+
+
+@communities_router.patch("/{community_id}/status")
+async def admin_community_status(
+    community_id: int,
+    body: CommunityStatusIn,
+    request: Request,
+    admin: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_async_db),
+) -> dict:
+    community = await admin_set_community_status(db, community_id, body.status)
+    return ok({"id": community.id, "status": community.status}, trace_id=request.state.trace_id)
