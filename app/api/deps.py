@@ -1,7 +1,7 @@
 """FastAPI 依赖注入：数据库会话、当前用户、角色校验。"""
 
 import jwt
-from fastapi import Depends
+from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -24,6 +24,7 @@ def get_db():
 
 
 def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),
 ) -> User:
@@ -45,10 +46,12 @@ def get_current_user(
         raise AppError(401, "UNAUTHORIZED", "账号不存在")
     if user.status != "ENABLED":
         raise AppError(403, "ACCOUNT_DISABLED", "账号已被禁用")
+    request.state.user_id = user.id
     return user
 
 
 def get_optional_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),
 ) -> User | None:
@@ -63,6 +66,7 @@ def get_optional_user(
     user = db.get(User, user_id)
     if user is None or user.deleted_at is not None or user.status != "ENABLED":
         return None
+    request.state.user_id = user.id
     return user
 
 

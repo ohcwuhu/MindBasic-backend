@@ -1,4 +1,4 @@
-import logging
+import time
 import uuid
 
 from fastapi import FastAPI, Request
@@ -24,8 +24,11 @@ from app.api.v1 import (
 )
 from app.core.config import cors_origin_list, settings
 from app.core.exceptions import AppError
+from app.core.logging import get_logger, setup_logging
 
-logger = logging.getLogger("mindbasic")
+setup_logging()
+logger = get_logger("mindbasic")
+access_logger = get_logger("mindbasic.access")
 
 app = FastAPI(title=settings.app_name, debug=settings.debug)
 
@@ -42,8 +45,23 @@ app.add_middleware(
 async def add_trace_id(request: Request, call_next):
     trace_id = request.headers.get("X-Request-Id") or uuid.uuid4().hex
     request.state.trace_id = trace_id
+    started = time.perf_counter()
     response = await call_next(request)
     response.headers["X-Request-Id"] = trace_id
+    access_logger.info(
+        "access",
+        extra={
+            "extra": {
+                "method": request.method,
+                "path": request.url.path,
+                "status": response.status_code,
+                "durationMs": round((time.perf_counter() - started) * 1000, 2),
+                "traceId": trace_id,
+                "userId": getattr(request.state, "user_id", None),
+                "ip": request.client.host if request.client else None,
+            }
+        },
+    )
     return response
 
 
@@ -82,7 +100,16 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
 
 @app.exception_handler(Exception)
 async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
-    logger.exception("unhandled error: %s", exc)
+    logger.exception(
+        "unhandled error",
+        extra={
+            "extra": {
+                "method": request.method,
+                "path": request.url.path,
+                "traceId": getattr(request.state, "trace_id", None),
+            }
+        },
+    )
     return envelope(
         500,
         "INTERNAL_ERROR",
