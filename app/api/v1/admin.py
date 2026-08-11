@@ -34,7 +34,9 @@ from app.schemas.admin import (
     TagPatchIn,
     UserStatusIn,
 )
+from app.schemas.system_config import SystemConfigUpdateIn
 from app.services import admin_service
+from app.services.system_config_service import get_all_configs, update_configs
 
 router = APIRouter(prefix="/admin/coach-audits", tags=["admin-coach-audits"])
 
@@ -431,5 +433,31 @@ async def admin_stats(
 ) -> dict:
     return ok(
         StatsOut(**await admin_service.admin_stats(db)).model_dump(by_alias=True),
+        trace_id=request.state.trace_id,
+    )
+
+
+config_router = APIRouter(prefix="/admin/system-configs", tags=["admin-config"])
+
+
+@config_router.get("")
+async def admin_system_configs(
+    request: Request,
+    admin: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_async_db),
+) -> dict:
+    return ok({"items": await get_all_configs(db)}, trace_id=request.state.trace_id)
+
+
+@config_router.put("")
+async def admin_update_system_configs(
+    body: SystemConfigUpdateIn,
+    request: Request,
+    admin: User = Depends(require_role("ADMIN")),
+    db: AsyncSession = Depends(get_async_db),
+) -> dict:
+    items = [{"key": item.key, "value": item.value} for item in body.items]
+    return ok(
+        {"items": await update_configs(db, admin, items)},
         trace_id=request.state.trace_id,
     )
