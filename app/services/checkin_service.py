@@ -1,9 +1,9 @@
-"""每日打卡、勋章与排行榜业务逻辑。"""
+"""每日打卡、勋章与排行榜业务逻辑（异步）。"""
 
 from datetime import date, timedelta
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppError
 from app.models.growth import Badge, CheckIn, UserBadge
@@ -11,34 +11,34 @@ from app.models.user import User
 from app.utils.time import to_iso
 
 
-def check_in(db: Session, user: User, content: str | None) -> tuple[CheckIn, list[Badge]]:
+async def check_in(db: AsyncSession, user: User, content: str | None) -> tuple[CheckIn, list[Badge]]:
     today = date.today()
-    if db.scalar(select(CheckIn.id).where(CheckIn.user_id == user.id, CheckIn.check_date == today)):
+    if await db.scalar(select(CheckIn.id).where(CheckIn.user_id == user.id, CheckIn.check_date == today)):
         raise AppError(409, "CONFLICT", "今天已经打过卡了")
     record = CheckIn(user_id=user.id, check_date=today, content=content)
     db.add(record)
-    db.flush()
-    earned = award_badges(db, user.id, today)
-    db.commit()
-    db.refresh(record)
+    await db.flush()
+    earned = await award_badges(db, user.id, today)
+    await db.commit()
+    await db.refresh(record)
     return record, earned
 
 
-def streak_days(db: Session, user_id: int, end: date) -> int:
+async def streak_days(db: AsyncSession, user_id: int, end: date) -> int:
     streak = 0
     day = end
-    while db.scalar(select(CheckIn.id).where(CheckIn.user_id == user_id, CheckIn.check_date == day)):
+    while await db.scalar(select(CheckIn.id).where(CheckIn.user_id == user_id, CheckIn.check_date == day)):
         streak += 1
         day -= timedelta(days=1)
     return streak
 
 
-def award_badges(db: Session, user_id: int, today: date) -> list[Badge]:
-    total = db.scalar(select(func.count()).select_from(CheckIn).where(CheckIn.user_id == user_id)) or 0
-    streak = streak_days(db, user_id, today)
+async def award_badges(db: AsyncSession, user_id: int, today: date) -> list[Badge]:
+    total = await db.scalar(select(func.count()).select_from(CheckIn).where(CheckIn.user_id == user_id)) or 0
+    streak = await streak_days(db, user_id, today)
     month_start = today.replace(day=1)
     month_count = (
-        db.scalar(
+        await db.scalar(
             select(func.count()).select_from(CheckIn).where(
                 CheckIn.user_id == user_id,
                 CheckIn.check_date >= month_start,
@@ -57,10 +57,10 @@ def award_badges(db: Session, user_id: int, today: date) -> list[Badge]:
     for key, ok in targets.items():
         if not ok:
             continue
-        badge = db.scalar(select(Badge).where(Badge.key == key))
+        badge = await db.scalar(select(Badge).where(Badge.key == key))
         if badge is None:
             continue
-        owned = db.scalar(
+        owned = await db.scalar(
             select(UserBadge.id).where(UserBadge.user_id == user_id, UserBadge.badge_id == badge.id)
         )
         if owned is None:
@@ -69,7 +69,7 @@ def award_badges(db: Session, user_id: int, today: date) -> list[Badge]:
     return earned
 
 
-def my_checkins(db: Session, user_id: int, month: str) -> list[CheckIn]:
+async def my_checkins(db: AsyncSession, user_id: int, month: str) -> list[CheckIn]:
     try:
         year, mon = map(int, month.split("-"))
         start = date(year, mon, 1)
@@ -77,7 +77,7 @@ def my_checkins(db: Session, user_id: int, month: str) -> list[CheckIn]:
     except ValueError:
         raise AppError(400, "VALIDATION_ERROR", "月份格式应为 YYYY-MM")
     return list(
-        db.scalars(
+        await db.scalars(
             select(CheckIn)
             .where(CheckIn.user_id == user_id, CheckIn.check_date >= start, CheckIn.check_date < end)
             .order_by(CheckIn.check_date.desc())
@@ -85,12 +85,14 @@ def my_checkins(db: Session, user_id: int, month: str) -> list[CheckIn]:
     )
 
 
-def my_badges(db: Session, user_id: int) -> list[dict]:
-    rows = db.execute(
-        select(Badge, UserBadge.earned_at)
-        .join(UserBadge, UserBadge.badge_id == Badge.id)
-        .where(UserBadge.user_id == user_id)
-        .order_by(Badge.sort_order)
+async def my_badges(db: AsyncSession, user_id: int) -> list[dict]:
+    rows = (
+        await db.execute(
+            select(Badge, UserBadge.earned_at)
+            .join(UserBadge, UserBadge.badge_id == Badge.id)
+            .where(UserBadge.user_id == user_id)
+            .order_by(Badge.sort_order)
+        )
     ).all()
     return [
         {
@@ -105,27 +107,29 @@ def my_badges(db: Session, user_id: int) -> list[dict]:
     ]
 
 
-def leaderboard(db: Session, period: str) -> list[dict]:
+async def leaderboard(db: AsyncSession, period: str) -> list[dict]:
     today = date.today()
     start = today - timedelta(days=6) if period == "week" else today.replace(day=1)
-    rows = db.execute(
-        # 按 user_id 分组：即使昵称相同也分开计数，昵称取自所属行
-        select(User.id, User.nickname, func.count(CheckIn.id))
-        .join(CheckIn, CheckIn.user_id == User.id)
-        .where(CheckIn.check_date >= start, User.deleted_at.is_(None))
-        .group_by(User.id, User.nickname)
-        .order_by(func.count(CheckIn.id).desc())
-        .limit(10)
+    rows = (
+        await db.execute(
+            # 按 user_id 分组：即使昵称相同也分开计数，昵称取自所属行
+            select(User.id, User.nickname, func.count(CheckIn.id))
+            .join(CheckIn, CheckIn.user_id == User.id)
+            .where(CheckIn.check_date >= start, User.deleted_at.is_(None))
+            .group_by(User.id, User.nickname)
+            .order_by(func.count(CheckIn.id).desc())
+            .limit(10)
+        )
     ).all()
     return [{"rank": i + 1, "nickname": nickname, "count": count} for i, (_, nickname, count) in enumerate(rows)]
 
 
-def my_stats(db: Session, user_id: int) -> dict:
+async def my_stats(db: AsyncSession, user_id: int) -> dict:
     today = date.today()
-    total = db.scalar(select(func.count()).select_from(CheckIn).where(CheckIn.user_id == user_id)) or 0
+    total = await db.scalar(select(func.count()).select_from(CheckIn).where(CheckIn.user_id == user_id)) or 0
     month_start = today.replace(day=1)
     month_count = (
-        db.scalar(
+        await db.scalar(
             select(func.count()).select_from(CheckIn).where(
                 CheckIn.user_id == user_id,
                 CheckIn.check_date >= month_start,
@@ -134,7 +138,7 @@ def my_stats(db: Session, user_id: int) -> dict:
         or 0
     )
     return {
-        "streak_days": streak_days(db, user_id, today),
+        "streak_days": await streak_days(db, user_id, today),
         "total_count": total,
         "month_count": month_count,
     }

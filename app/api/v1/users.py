@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, Header, Query, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import get_async_db, get_current_user, get_db
 from app.api.response import ok, paginated
 from app.models.user import User
 from app.schemas.auth import ChangePasswordIn, UserPatchIn
@@ -87,10 +88,10 @@ def deactivate_me(
 
 
 @router.get("/me/badges")
-def my_badges_endpoint(
+async def my_badges_endpoint(
     request: Request,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    items = [BadgeOut(**b).model_dump(by_alias=True) for b in my_badges(db, user.id)]
+    items = [BadgeOut(**b).model_dump(by_alias=True) for b in await my_badges(db, user.id)]
     return ok({"items": items}, trace_id=request.state.trace_id)

@@ -3,9 +3,9 @@
 from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import get_async_db, get_current_user
 from app.api.response import ok
 from app.models.user import User
 from app.schemas.checkin import (
@@ -37,13 +37,13 @@ def checkin_to_out(record) -> dict:
 
 
 @router.post("", status_code=201)
-def daily_check_in(
+async def daily_check_in(
     body: CheckInIn,
     request: Request,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    record, earned = check_in(db, user, body.content)
+    record, earned = await check_in(db, user, body.content)
     return ok(
         {
             "record": CheckInOut(**checkin_to_out(record)).model_dump(by_alias=True),
@@ -64,36 +64,36 @@ def daily_check_in(
 
 
 @router.get("")
-def my_checkins_endpoint(
+async def my_checkins_endpoint(
     request: Request,
     month: str = Query(default=""),
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
     month = month or date.today().strftime("%Y-%m")
-    rows = my_checkins(db, user.id, month)
+    rows = await my_checkins(db, user.id, month)
     items = [CheckInOut(**checkin_to_out(r)).model_dump(by_alias=True) for r in rows]
     return ok({"items": items}, trace_id=request.state.trace_id)
 
 
 @router.get("/leaderboard")
-def leaderboard_endpoint(
+async def leaderboard_endpoint(
     request: Request,
     period: str = Query(default="month", pattern="^(week|month)$"),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     user: User = Depends(get_current_user),
 ) -> dict:
-    items = [LeaderboardItemOut(**item).model_dump(by_alias=True) for item in leaderboard(db, period)]
+    items = [LeaderboardItemOut(**item).model_dump(by_alias=True) for item in await leaderboard(db, period)]
     return ok({"items": items}, trace_id=request.state.trace_id)
 
 
 @router.get("/stats")
-def stats_endpoint(
+async def stats_endpoint(
     request: Request,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
     return ok(
-        CheckInStatsOut(**my_stats(db, user.id)).model_dump(by_alias=True),
+        CheckInStatsOut(**await my_stats(db, user.id)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
     )
