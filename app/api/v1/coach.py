@@ -6,6 +6,7 @@ from datetime import datetime
 
 from app.api.deps import get_async_db, get_current_coach, get_current_user
 from app.api.response import ok, paginated
+from app.core.exceptions import AppError
 from app.models.coach import CoachProfile
 from app.models.user import User
 from app.schemas.coach import CoachProfileIn, CoachProfileOut, CoachProfilePatchIn
@@ -464,10 +465,22 @@ async def coach_case_stats(
 @router.get("/cases/export")
 async def coach_cases_export(
     request: Request,
+    ids: str | None = Query(default=None, max_length=2000, description="逗号分隔的个案编号，缺省导出全部"),
     coach: CoachProfile = Depends(get_current_coach),
     db: AsyncSession = Depends(get_async_db),
 ) -> Response:
-    records = await list_all_cases(db, coach.id)
+    parsed_ids: list[int] | None = None
+    if ids:
+        parts = [part.strip() for part in ids.split(",") if part.strip()]
+        if not parts:
+            raise AppError(400, "VALIDATION_ERROR", "个案编号不能为空")
+        try:
+            parsed_ids = [int(part) for part in parts]
+        except ValueError:
+            raise AppError(400, "VALIDATION_ERROR", "个案编号格式错误")
+    records = await list_all_cases(db, coach.id, ids=parsed_ids)
+    if parsed_ids is not None and len(records) != len(set(parsed_ids)):
+        raise AppError(400, "VALIDATION_ERROR", "包含不存在的个案编号")
     filename = f"个案记录_{datetime.now().strftime('%Y%m%d')}.md"
     return Response(
         content=cases_to_markdown(records),

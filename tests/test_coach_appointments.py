@@ -216,6 +216,29 @@ def test_case_records_flow(client, coach_env):
     assert "小圆" in markdown
     assert "---" in markdown
 
+    # 指定导出所选个案
+    resp = client.get(
+        f"/api/v1/coach/cases/export?ids={manual_id}",
+        headers=coach_env["coach_headers"],
+    )
+    assert resp.status_code == 200
+    selected = resp.content.decode("utf-8")
+    assert "小满" in selected
+    assert "小圆" not in selected
+
+    resp = client.get(
+        "/api/v1/coach/cases/export?ids=999999",
+        headers=coach_env["coach_headers"],
+    )
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "VALIDATION_ERROR"
+
+    resp = client.get(
+        "/api/v1/coach/cases/export?ids=abc",
+        headers=coach_env["coach_headers"],
+    )
+    assert resp.status_code == 400
+
     resp = client.delete(f"/api/v1/coach/cases/{manual_id}", headers=coach_env["coach_headers"])
     assert resp.status_code == 204
 

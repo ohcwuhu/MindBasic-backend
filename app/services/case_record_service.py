@@ -70,15 +70,18 @@ async def list_cases(
 
 
 async def list_all_cases(
-    db: AsyncSession, coach_profile_id: int, limit: int = 10000
+    db: AsyncSession,
+    coach_profile_id: int,
+    ids: list[int] | None = None,
+    limit: int = 10000,
 ) -> list[CaseRecord]:
-    """导出用：一次取该教练全部个案（按时间倒序，上限防内存失控）。"""
+    """导出用：取该教练全部（或指定 ids 的）个案，按时间倒序，上限防内存失控。"""
+    stmt = select(CaseRecord).where(CaseRecord.coach_id == coach_profile_id)
+    if ids:
+        stmt = stmt.where(CaseRecord.id.in_(ids))
     return list(
         await db.scalars(
-            select(CaseRecord)
-            .where(CaseRecord.coach_id == coach_profile_id)
-            .order_by(CaseRecord.created_at.desc())
-            .limit(limit)
+            stmt.order_by(CaseRecord.created_at.desc()).limit(limit)
         )
     )
 
