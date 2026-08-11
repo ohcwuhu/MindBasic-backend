@@ -1,6 +1,7 @@
 """用户评价业务逻辑。"""
 
 from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import AppError
@@ -53,16 +54,16 @@ def create_review(db: Session, user: User, appointment_id: int, rating: int, con
     return review
 
 
-def coach_reviews(
-    db: Session, coach_id: int, page: int, page_size: int
+async def coach_reviews(
+    db: AsyncSession, coach_id: int, page: int, page_size: int
 ) -> tuple[list[tuple[Review, User]], int]:
     base = select(Review, User).join(User, User.id == Review.user_id).where(Review.coach_id == coach_id)
-    total = db.scalar(select(func.count()).select_from(Review).where(Review.coach_id == coach_id)) or 0
-    rows = db.execute(
+    total = await db.scalar(select(func.count()).select_from(Review).where(Review.coach_id == coach_id)) or 0
+    rows = (await db.execute(
         base.order_by(Review.created_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
-    ).all()
+    )).all()
     return rows, total
 
 
