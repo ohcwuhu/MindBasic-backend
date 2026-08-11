@@ -7,7 +7,6 @@ from datetime import datetime
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
 
 from app.core.exceptions import AppError
 from app.models.coach import Appointment, CoachProfile, CoachSlot, Service
@@ -24,13 +23,13 @@ def generate_appointment_no() -> str:
     return "AP" + datetime.now().strftime("%Y%m%d%H%M%S") + uuid.uuid4().hex[:6].upper()
 
 
-def create_appointment(
-    db: Session,
+async def create_appointment(
+    db: AsyncSession,
     user: User,
     data: AppointmentCreateIn,
     idempotency_key: str | None,
 ) -> tuple[Appointment, bool]:
-    coach = db.scalar(
+    coach = await db.scalar(
         select(CoachProfile).where(
             CoachProfile.id == data.coach_id,
             CoachProfile.audit_status == "APPROVED",
@@ -42,7 +41,7 @@ def create_appointment(
     if coach.user_id == user.id:
         raise AppError(409, "COACH_SELF_BOOKING", "不能预约自己")
 
-    service = db.scalar(
+    service = await db.scalar(
         select(Service).where(
             Service.id == data.service_id,
             Service.coach_id == coach.id,
@@ -52,13 +51,13 @@ def create_appointment(
     if service is None:
         raise AppError(400, "SERVICE_INVALID", "服务项目不存在或已下架")
 
-    slot = db.get(CoachSlot, data.slot_id)
+    slot = await db.get(CoachSlot, data.slot_id)
     if slot is None or slot.coach_id != coach.id:
         raise AppError(409, "SLOT_UNAVAILABLE", "所选时段不可用")
     if slot.date < date_type.today():
         raise AppError(409, "SLOT_UNAVAILABLE", "所选时段已过期")
 
-    result = db.execute(
+    result = await db.execute(
         update(CoachSlot)
         .where(CoachSlot.id == slot.id, CoachSlot.status == "AVAILABLE")
         .values(status="BOOKED")
@@ -85,11 +84,11 @@ def create_appointment(
         f"{user.nickname}提交了新预约，请尽快确认。",
     )
     try:
-        db.commit()
+        await db.commit()
     except IntegrityError:
-        db.rollback()
+        await db.rollback()
         if idempotency_key:
-            existing = db.scalar(
+            existing = await db.scalar(
                 select(Appointment).where(
                     Appointment.user_id == user.id,
                     Appointment.idempotency_key == idempotency_key,
@@ -98,15 +97,15 @@ def create_appointment(
             if existing is not None:
                 return existing, False
         raise AppError(409, "SLOT_UNAVAILABLE", "所选时段已被预约")
-    db.refresh(appointment)
+    await db.refresh(appointment)
     return appointment, True
 
 
-def get_appointment_ctx(db: Session, appointment: Appointment) -> dict:
-    coach_user = db.get(User, db.get(CoachProfile, appointment.coach_id).user_id)
-    service = db.get(Service, appointment.service_id)
-    slot = db.get(CoachSlot, appointment.slot_id)
-    reviewed = db.scalar(select(Review.id).where(Review.appointment_id == appointment.id)) is not None
+async def get_appointment_ctx(db: AsyncSession, appointment: Appointment) -> dict:
+    coach_user = await db.get(User, (await db.get(CoachProfile, appointment.coach_id)).user_id)
+    service = await db.get(Service, appointment.service_id)
+    slot = await db.get(CoachSlot, appointment.slot_id)
+    reviewed = await db.scalar(select(Review.id).where(Review.appointment_id == appointment.id)) is not None
     return {
         "id": appointment.id,
         "appointment_no": appointment.appointment_no,
@@ -136,7 +135,7 @@ def get_appointment_ctx(db: Session, appointment: Appointment) -> dict:
     }
 
 
-def my_appointments_to_out(db: Session, appointments: list[Appointment]) -> list[dict]:
+async def my_appointments_to_out(db: AsyncSession, appointments: list[Appointment]) -> list[dict]:
     """批量序列化我的预约（避免列表接口 N+1）。"""
     if not appointments:
         return []
@@ -145,12 +144,12 @@ def my_appointments_to_out(db: Session, appointments: list[Appointment]) -> list
     slot_ids = [a.slot_id for a in appointments]
     appointment_ids = [a.id for a in appointments]
 
-    coaches = {c.id: c for c in db.scalars(select(CoachProfile).where(CoachProfile.id.in_(coach_ids)))}
+    coaches = {c.id: c for c in await db.scalars(select(CoachProfile).where(CoachProfile.id.in_(coach_ids)))}
     coach_user_ids = [c.user_id for c in coaches.values()]
-    users = {u.id: u for u in db.scalars(select(User).where(User.id.in_(coach_user_ids)))}
-    services = {s.id: s for s in db.scalars(select(Service).where(Service.id.in_(service_ids)))}
-    slots = {s.id: s for s in db.scalars(select(CoachSlot).where(CoachSlot.id.in_(slot_ids)))}
-    reviewed_ids = set(db.scalars(select(Review.appointment_id).where(Review.appointment_id.in_(appointment_ids))))
+    users = {u.id: u for u in await db.scalars(select(User).where(User.id.in_(coach_user_ids)))}
+    services = {s.id: s for s in await db.scalars(select(Service).where(Service.id.in_(service_ids)))}
+    slots = {s.id: s for s in await db.scalars(select(CoachSlot).where(CoachSlot.id.in_(slot_ids)))}
+    reviewed_ids = set(await db.scalars(select(Review.appointment_id).where(Review.appointment_id.in_(appointment_ids))))
 
     items: list[dict] = []
     for a in appointments:
@@ -188,15 +187,15 @@ def my_appointments_to_out(db: Session, appointments: list[Appointment]) -> list
     return items
 
 
-def list_my_appointments(
-    db: Session, user_id: int, status: str | None, page: int, page_size: int
+async def list_my_appointments(
+    db: AsyncSession, user_id: int, status: str | None, page: int, page_size: int
 ) -> tuple[list[Appointment], int]:
     stmt = select(Appointment).where(Appointment.user_id == user_id)
     if status:
         stmt = stmt.where(Appointment.status == status)
-    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    total = await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = list(
-        db.scalars(
+        await db.scalars(
             stmt.order_by(Appointment.created_at.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
@@ -205,8 +204,8 @@ def list_my_appointments(
     return rows, total
 
 
-def cancel_my_appointment(db: Session, user: User, appointment_id: int) -> Appointment:
-    appointment = db.scalar(
+async def cancel_my_appointment(db: AsyncSession, user: User, appointment_id: int) -> Appointment:
+    appointment = await db.scalar(
         select(Appointment).where(Appointment.id == appointment_id, Appointment.user_id == user.id)
     )
     if appointment is None:
@@ -215,11 +214,11 @@ def cancel_my_appointment(db: Session, user: User, appointment_id: int) -> Appoi
         raise AppError(409, "INVALID_STATE_TRANSITION", "当前状态不允许取消")
     appointment.status = "CANCELLED"
     appointment.cancel_by = user.id
-    slot = db.get(CoachSlot, appointment.slot_id)
+    slot = await db.get(CoachSlot, appointment.slot_id)
     if slot is not None and slot.status == "BOOKED":
         slot.status = "AVAILABLE"
-    db.commit()
-    db.refresh(appointment)
+    await db.commit()
+    await db.refresh(appointment)
     return appointment
 
 

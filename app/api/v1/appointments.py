@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Header, Query, Request
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import get_async_db, get_current_user
 from app.api.response import ok, paginated
 from app.models.user import User
 from app.schemas.appointment import AppointmentCreateIn, AppointmentOut
@@ -19,15 +19,15 @@ router = APIRouter(prefix="/appointments", tags=["appointments"])
 
 
 @router.post("", status_code=201)
-def book_appointment(
+async def book_appointment(
     body: AppointmentCreateIn,
     request: Request,
     idempotencyKey: str | None = Header(default=None, max_length=36, alias="Idempotency-Key"),
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    appointment, created = create_appointment(db, user, body, idempotencyKey)
-    payload = AppointmentOut(**get_appointment_ctx(db, appointment)).model_dump(by_alias=True)
+    appointment, created = await create_appointment(db, user, body, idempotencyKey)
+    payload = AppointmentOut(**await get_appointment_ctx(db, appointment)).model_dump(by_alias=True)
     if not created:
         from fastapi.responses import JSONResponse
 
@@ -39,42 +39,42 @@ def book_appointment(
 
 
 @router.get("/mine")
-def my_appointments(
+async def my_appointments(
     request: Request,
     status: str | None = Query(default=None, pattern="^(PENDING|CONFIRMED|COMPLETED|CANCELLED)$"),
     page: int = Query(default=1, ge=1),
     pageSize: int = Query(default=10, ge=1, le=50, alias="pageSize"),
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    rows, total = list_my_appointments(db, user.id, status, page, pageSize)
-    items = [AppointmentOut(**item).model_dump(by_alias=True) for item in my_appointments_to_out(db, rows)]
+    rows, total = await list_my_appointments(db, user.id, status, page, pageSize)
+    items = [AppointmentOut(**item).model_dump(by_alias=True) for item in await my_appointments_to_out(db, rows)]
     return ok(paginated(items, total, page, pageSize), trace_id=request.state.trace_id)
 
 
 @router.post("/{appointment_id}/cancel")
-def cancel_appointment(
+async def cancel_appointment(
     appointment_id: int,
     request: Request,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    appointment = cancel_my_appointment(db, user, appointment_id)
+    appointment = await cancel_my_appointment(db, user, appointment_id)
     return ok(
-        AppointmentOut(**get_appointment_ctx(db, appointment)).model_dump(by_alias=True),
+        AppointmentOut(**await get_appointment_ctx(db, appointment)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
     )
 
 
 @router.post("/{appointment_id}/review", status_code=201)
-def review_appointment(
+async def review_appointment(
     appointment_id: int,
     body: ReviewIn,
     request: Request,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    review = create_review(db, user, appointment_id, body.rating, body.content)
+    review = await create_review(db, user, appointment_id, body.rating, body.content)
     return ok(
         ReviewOut(**review_to_out(review, user.nickname)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
@@ -82,13 +82,13 @@ def review_appointment(
 
 
 @router.get("/{appointment_id}/review")
-def my_appointment_review(
+async def my_appointment_review(
     appointment_id: int,
     request: Request,
     user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    review = get_my_review(db, user.id, appointment_id)
+    review = await get_my_review(db, user.id, appointment_id)
     if review is None:
         from app.core.exceptions import AppError
 

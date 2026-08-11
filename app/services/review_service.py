@@ -2,7 +2,6 @@
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
 
 from app.core.exceptions import AppError
 from app.models.coach import Appointment, CoachProfile
@@ -11,8 +10,8 @@ from app.models.v1_1 import Review
 from app.utils.time import to_iso
 
 
-def get_my_review(db: Session, user_id: int, appointment_id: int) -> Review | None:
-    return db.scalar(
+async def get_my_review(db: AsyncSession, user_id: int, appointment_id: int) -> Review | None:
+    return await db.scalar(
         select(Review).where(
             Review.appointment_id == appointment_id,
             Review.user_id == user_id,
@@ -20,15 +19,15 @@ def get_my_review(db: Session, user_id: int, appointment_id: int) -> Review | No
     )
 
 
-def create_review(db: Session, user: User, appointment_id: int, rating: int, content: str | None) -> Review:
-    appointment = db.scalar(
+async def create_review(db: AsyncSession, user: User, appointment_id: int, rating: int, content: str | None) -> Review:
+    appointment = await db.scalar(
         select(Appointment).where(Appointment.id == appointment_id, Appointment.user_id == user.id)
     )
     if appointment is None:
         raise AppError(404, "APPOINTMENT_NOT_FOUND", "预约记录不存在")
     if appointment.status != "COMPLETED":
         raise AppError(400, "INVALID_STATE_TRANSITION", "仅已完成的服务可以评价")
-    if db.scalar(select(Review.id).where(Review.appointment_id == appointment_id)) is not None:
+    if await db.scalar(select(Review.id).where(Review.appointment_id == appointment_id)) is not None:
         raise AppError(409, "CONFLICT", "该预约已评价")
 
     review = Review(
@@ -39,18 +38,18 @@ def create_review(db: Session, user: User, appointment_id: int, rating: int, con
         content=content,
     )
     db.add(review)
-    db.flush()
-    avg, count = db.execute(
+    await db.flush()
+    avg, count = (await db.execute(
         select(func.avg(Review.rating), func.count())
         .where(Review.coach_id == appointment.coach_id)
-    ).one()
-    db.execute(
+    )).one()
+    await db.execute(
         update(CoachProfile)
         .where(CoachProfile.id == appointment.coach_id)
         .values(rating=round(float(avg), 2), review_count=int(count))
     )
-    db.commit()
-    db.refresh(review)
+    await db.commit()
+    await db.refresh(review)
     return review
 
 
