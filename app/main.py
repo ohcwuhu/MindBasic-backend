@@ -16,6 +16,7 @@ from app.api.v1 import (
     checkins,
     emotion_journals,
     files,
+    growth_assessments,
     home,
     notifications,
     platform,
@@ -132,6 +133,7 @@ app.include_router(appointments.router, prefix="/api/v1")
 app.include_router(coaches.router, prefix="/api/v1")
 app.include_router(tags.router, prefix="/api/v1")
 app.include_router(files.router, prefix="/api/v1")
+app.include_router(growth_assessments.router, prefix="/api/v1")
 app.include_router(checkins.router, prefix="/api/v1")
 app.include_router(notifications.router, prefix="/api/v1")
 app.include_router(platform.router, prefix="/api/v1")

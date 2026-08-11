@@ -204,3 +204,72 @@ class EmotionFeedbackLib(Base):
         server_default=text("CURRENT_TIMESTAMP(3)"),
         onupdate=text("CURRENT_TIMESTAMP(3)"),
     )
+
+
+class GrowthAssessmentTemplate(Base):
+    """成长测评量表模板（由教练代表评审维护，版本化）。"""
+
+    __tablename__ = "growth_assessment_templates"
+    __table_args__ = (
+        Index("idx_growth_templates_enabled", "is_enabled"),
+        UniqueConstraint("name", "version", name="uq_growth_template_version"),
+    )
+
+    id = Column(BIGINT(unsigned=True), primary_key=True, autoincrement=True)
+    name = Column(String(64), nullable=False)
+    description = Column(String(255), nullable=True)
+    version = Column(Integer, nullable=False, server_default=text("1"))
+    is_enabled = Column(Boolean, nullable=False, server_default=text("1"))
+    created_at = Column(DATETIME(fsp=3), nullable=False, server_default=text("CURRENT_TIMESTAMP(3)"))
+    updated_at = Column(
+        DATETIME(fsp=3),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3)"),
+        onupdate=text("CURRENT_TIMESTAMP(3)"),
+    )
+
+
+class GrowthAssessmentQuestion(Base):
+    """测评题目（每维度 3 题，5 点 Likert）。"""
+
+    __tablename__ = "growth_assessment_questions"
+    __table_args__ = (
+        Index("idx_growth_questions_template", "template_id", "sort_order"),
+    )
+
+    id = Column(BIGINT(unsigned=True), primary_key=True, autoincrement=True)
+    template_id = Column(
+        BIGINT(unsigned=True),
+        ForeignKey("growth_assessment_templates.id", ondelete="CASCADE", name="fk_growth_questions_template"),
+        nullable=False,
+    )
+    dimension_key = Column(String(32), nullable=False, comment="SELF_AWARENESS/RESOURCE_USE/GOAL_CLARITY/ACTION/EMOTION_REGULATION")
+    dimension_name = Column(String(32), nullable=False)
+    question = Column(Text, nullable=False)
+    options = Column(JSON, nullable=False, comment="[{value,label}]")
+    sort_order = Column(Integer, nullable=False, server_default=text("0"))
+
+
+class GrowthAssessmentResult(Base):
+    """测评结果：答案快照 + 维度得分 + 个性化报告。"""
+
+    __tablename__ = "growth_assessment_results"
+    __table_args__ = (
+        Index("idx_growth_results_user", "user_id", desc("created_at")),
+    )
+
+    id = Column(BIGINT(unsigned=True), primary_key=True, autoincrement=True)
+    user_id = Column(
+        BIGINT(unsigned=True),
+        ForeignKey("users.id", ondelete="CASCADE", name="fk_growth_results_user"),
+        nullable=False,
+    )
+    template_id = Column(
+        BIGINT(unsigned=True),
+        ForeignKey("growth_assessment_templates.id", ondelete="RESTRICT", name="fk_growth_results_template"),
+        nullable=False,
+    )
+    answers = Column(JSON, nullable=False, comment="{questionId: score}")
+    scores = Column(JSON, nullable=False, comment="[{dimensionKey,score,level}]")
+    report = Column(JSON, nullable=False, comment="个性化报告与推荐")
+    created_at = Column(DATETIME(fsp=3), nullable=False, server_default=text("CURRENT_TIMESTAMP(3)"))
