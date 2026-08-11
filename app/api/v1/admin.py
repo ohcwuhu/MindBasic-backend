@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_role
 from app.api.response import ok, paginated
+from app.core.cache import invalidate_home
 from app.models.user import User
 from app.schemas.coach import AuditListOut, AuditOut, AuditRejectIn
 from app.utils.format import mask_phone
@@ -99,6 +100,7 @@ def approve(
     db: Session = Depends(get_db),
 ) -> dict:
     audit = approve_audit(db, admin, audit_id)
+    invalidate_home()
     return ok({"id": audit.id, "status": audit.status}, trace_id=request.state.trace_id)
 
 
@@ -111,6 +113,7 @@ def reject(
     db: Session = Depends(get_db),
 ) -> dict:
     audit = reject_audit(db, admin, audit_id, body.reason)
+    invalidate_home()
     return ok({"id": audit.id, "status": audit.status, "remark": audit.remark}, trace_id=request.state.trace_id)
 
 
@@ -178,6 +181,7 @@ def admin_create_article(
     db: Session = Depends(get_db),
 ) -> dict:
     article = admin_service.create_article(db, body)
+    invalidate_home()
     return ok(
         ArticleAdminOut(**admin_service.article_to_admin_out(article)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
@@ -193,6 +197,7 @@ def admin_update_article(
     db: Session = Depends(get_db),
 ) -> dict:
     article = admin_service.update_article(db, article_id, body)
+    invalidate_home()
     return ok(
         ArticleAdminOut(**admin_service.article_to_admin_out(article)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
@@ -207,6 +212,7 @@ def admin_delete_article(
     db: Session = Depends(get_db),
 ) -> None:
     admin_service.delete_article(db, article_id)
+    invalidate_home()
 
 
 @categories_router.get("")
@@ -278,6 +284,7 @@ def admin_create_banner(
     db: Session = Depends(get_db),
 ) -> dict:
     banner = admin_service.create_banner(db, body)
+    invalidate_home()
     return ok(
         BannerAdminOut(**admin_service.banner_to_admin_out(banner)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
@@ -293,6 +300,7 @@ def admin_update_banner(
     db: Session = Depends(get_db),
 ) -> dict:
     banner = admin_service.update_banner(db, banner_id, body)
+    invalidate_home()
     return ok(
         BannerAdminOut(**admin_service.banner_to_admin_out(banner)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
@@ -307,6 +315,7 @@ def admin_delete_banner(
     db: Session = Depends(get_db),
 ) -> None:
     admin_service.delete_banner(db, banner_id)
+    invalidate_home()
 
 
 @tags_router.get("")
@@ -329,6 +338,7 @@ def admin_create_tag(
     db: Session = Depends(get_db),
 ) -> dict:
     tag = admin_service.create_tag(db, body)
+    invalidate_home()
     return ok(
         TagAdminOut(**admin_service.tag_to_admin_out(tag)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
@@ -344,6 +354,7 @@ def admin_update_tag(
     db: Session = Depends(get_db),
 ) -> dict:
     tag = admin_service.update_tag(db, tag_id, body)
+    invalidate_home()
     return ok(
         TagAdminOut(**admin_service.tag_to_admin_out(tag)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
@@ -358,6 +369,7 @@ def admin_delete_tag(
     db: Session = Depends(get_db),
 ) -> None:
     admin_service.delete_tag(db, tag_id)
+    invalidate_home()
 
 
 @feedback_router.get("")

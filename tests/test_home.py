@@ -57,3 +57,10 @@ def test_home_with_optional_auth(client, auth_headers):
     resp = client.get("/api/v1/home", headers=auth_headers)
     assert resp.status_code == 200
     assert resp.json()["code"] == "OK"
+
+
+def test_home_anonymous_cache(client):
+    from app.core.cache import get as cache_get
+
+    client.get("/api/v1/home")
+    assert cache_get("home:anon") is not None

@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, get_optional_user
 from app.api.response import ok
+from app.core.cache import get as cache_get, set as cache_set
 from app.models.user import User
 from app.schemas.home import BannerOut, CoachBriefOut, HomeOut, QuickEntryOut
 from app.schemas.article import ArticleListOut
@@ -35,6 +36,10 @@ def get_home(
     user: User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ) -> dict:
+    if user is None:
+        cached = cache_get("home:anon")
+        if cached is not None:
+            return ok(cached, trace_id=request.state.trace_id)
     banners = get_banners(db)
     articles = get_featured_articles(db)
     favorite_ids = get_favorite_ids(db, user.id, [a.id for a in articles]) if user else set()
@@ -45,7 +50,10 @@ def get_home(
         featured_articles=[ArticleListOut(**article_to_out(a, favorite_ids)) for a in articles],
         recommended_coaches=[CoachBriefOut(**c) for c in get_recommended_coaches(db)],
     )
-    return ok(home.model_dump(by_alias=True), trace_id=request.state.trace_id)
+    payload = home.model_dump(by_alias=True)
+    if user is None:
+        cache_set("home:anon", payload)
+    return ok(payload, trace_id=request.state.trace_id)
 
 
 @router.get("/banners")
