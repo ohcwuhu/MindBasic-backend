@@ -4,6 +4,7 @@
 #
 #    pip-compile --output-file=requirements.lock --strip-extras requirements.txt
 #
+--index-url https://pypi.tuna.tsinghua.edu.cn/simple
 
 alembic==1.19.1
     # via -r requirements.txt
@@ -15,6 +16,8 @@ anyio==4.14.2
     # via
     #   starlette
     #   watchfiles
+asyncmy==0.2.13
+    # via -r requirements.txt
 bcrypt==5.0.0
     # via -r requirements.txt
 bleach==6.4.0
