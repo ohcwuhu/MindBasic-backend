@@ -109,14 +109,15 @@ def leaderboard(db: Session, period: str) -> list[dict]:
     today = date.today()
     start = today - timedelta(days=6) if period == "week" else today.replace(day=1)
     rows = db.execute(
-        select(User.nickname, func.count(CheckIn.id))
+        # 按 user_id 分组：即使昵称相同也分开计数，昵称取自所属行
+        select(User.id, User.nickname, func.count(CheckIn.id))
         .join(CheckIn, CheckIn.user_id == User.id)
         .where(CheckIn.check_date >= start, User.deleted_at.is_(None))
         .group_by(User.id, User.nickname)
         .order_by(func.count(CheckIn.id).desc())
         .limit(10)
     ).all()
-    return [{"rank": i + 1, "nickname": nickname, "count": count} for i, (nickname, count) in enumerate(rows)]
+    return [{"rank": i + 1, "nickname": nickname, "count": count} for i, (_, nickname, count) in enumerate(rows)]
 
 
 def my_stats(db: Session, user_id: int) -> dict:

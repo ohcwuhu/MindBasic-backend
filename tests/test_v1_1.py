@@ -210,3 +210,26 @@ def test_coach_clients_and_phrases(client, env):
 
     mine_phrases = client.get("/api/v1/coach/phrases", headers=headers).json()["data"]["items"]
     assert len(mine_phrases) >= 1
+
+
+def test_leaderboard_group_by_user(client):
+    nickname = "同名用户"
+    phones = [unique_phone("134"), unique_phone("133")]
+    try:
+        last_headers = None
+        for phone in phones:
+            reg = client.post(
+                "/api/v1/auth/register",
+                json={"phone": phone, "password": "Test123456", "nickname": nickname, "privacyAgreed": True},
+            )
+            assert reg.status_code == 201
+            headers = {"Authorization": f"Bearer {reg.json()['data']['accessToken']}"}
+            last_headers = headers
+            assert client.post("/api/v1/check-ins", headers=headers, json={"content": "打卡"}).status_code == 201
+
+        board = client.get("/api/v1/check-ins/leaderboard?period=month", headers=last_headers).json()["data"]["items"]
+        same = [item for item in board if item["nickname"] == nickname]
+        assert len(same) == 2  # 同名用户按 user_id 分开计数
+    finally:
+        for phone in phones:
+            delete_user_by_phone(phone)
