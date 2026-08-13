@@ -13,3 +13,6 @@ python-multipart>=0.0.9
 redis>=5.0.0
 bleach>=6.0.0
 asyncmy>=0.2.9
+python-socketio>=5.16.1
+python-engineio>=4.13.1
+imageio-ffmpeg>=0.4.7

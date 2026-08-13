@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from: str = ""
     email_code_ttl_minutes: int = 10
+    # AI 实验模块（复刻 RelMind：实时情绪识别 + 音频分析）
+    ai_lab_enabled: bool = True
+    ai_lab_frame_interval_ms: int = 400
+    ai_lab_audio_max_mb: int = 20
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -1,0 +1,13 @@
+# AI 实验室可选重型依赖（RelMind 复刻的真实推理）。
+# 注意：funasr 仅支持 Python 3.8-3.11；建议在独立 Python 3.11 环境安装，
+#       MindBasic 主环境（3.12）未安装时自动降级为 mock 结果。
+deepface==0.0.99
+mtcnn>=1.0.0
+opencv-python>=4.13.0.92
+funasr>=1.0.0
+torch>=2.0.0
+torchaudio>=2.0.0
+modelscope>=1.10.0
+opensmile>=2.5.0
+transformers>=4.40.0
+sentencepiece>=0.2.0
