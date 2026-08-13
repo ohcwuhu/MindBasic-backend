@@ -1,7 +1,6 @@
 import time
 import uuid
 
-import socketio
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,7 +8,6 @@ from fastapi.responses import JSONResponse
 
 from app.api.v1 import (
     admin,
-    ai_lab,
     appointments,
     articles,
     auth,
@@ -36,18 +34,6 @@ logger = get_logger("mindbasic")
 access_logger = get_logger("mindbasic.access")
 
 app = FastAPI(title=settings.app_name, debug=settings.debug)
-
-# ─── SocketIO（AI 实验室：实时情绪识别，与 RelMind upload_frame 协议对齐）────
-sio = socketio.AsyncServer(
-    async_mode="asgi",
-    cors_allowed_origins="*",
-    logger=False,
-    engineio_logger=False,
-)
-from app.services.ai_lab.socket_events import register_socket_events  # noqa: E402
-
-register_socket_events(sio)
-socket_app = socketio.ASGIApp(sio, app)
 
 app.add_middleware(
     CORSMiddleware,
@@ -164,7 +150,6 @@ app.include_router(admin.feedback_router, prefix="/api/v1")
 app.include_router(admin.stats_router, prefix="/api/v1")
 app.include_router(admin.config_router, prefix="/api/v1")
 app.include_router(admin.communities_router, prefix="/api/v1")
-app.include_router(ai_lab.router, prefix="/api/v1")
 
 
 @app.get("/health", tags=["system"])
