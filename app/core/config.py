@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from: str = ""
     email_code_ttl_minutes: int = 10
+    # AI 实验室：DeepSeek 心理教练
+    deepseek_api_key: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",

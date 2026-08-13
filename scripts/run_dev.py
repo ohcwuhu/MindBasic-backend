@@ -9,4 +9,4 @@ sys.path.insert(0, BASE_DIR)
 
 import uvicorn
 
-uvicorn.run("app.main:app", host="127.0.0.1", port=8000)
+uvicorn.run("app.main:socket_app", host="127.0.0.1", port=8000)

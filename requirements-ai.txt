@@ -1,0 +1,10 @@
+# AI 实验室重型依赖（与 requirements.txt 配合安装）
+# torch / tensorflow / tf-keras 体积较大，请按平台单独安装（示例为 CPU 版）：
+#   pip install torch torchaudio tensorflow tf-keras
+python-socketio>=5.11.0
+funasr>=1.4.1
+opensmile>=2.6.0
+deepface>=0.0.99
+opencv-python>=4.9.0
+imageio-ffmpeg>=0.6.0
+soundfile>=0.13.0

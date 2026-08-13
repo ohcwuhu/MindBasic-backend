@@ -1,10 +1,13 @@
 import time
 import uuid
+import threading
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+import socketio
 
 from app.api.v1 import (
     admin,
@@ -25,6 +28,8 @@ from app.api.v1 import (
     tags,
     users,
 )
+from app.api.v1 import ai_coach, ai_lab
+from app.services.ai_lab import socket_events
 from app.core.config import cors_origin_list, settings
 from app.core.exceptions import AppError
 from app.core.logging import get_logger, setup_logging
@@ -33,7 +38,36 @@ setup_logging()
 logger = get_logger("mindbasic")
 access_logger = get_logger("mindbasic.access")
 
-app = FastAPI(title=settings.app_name, debug=settings.debug)
+
+def _background_warmup() -> None:
+    """后台预热 AI 模型（SenseVoice + emotion2vec + 文本情感 + OpenSMILE）。"""
+    try:
+        from app.api.v1.ai_lab import _SV, _EV, _TE, _OS
+
+        logger.info("[WARMUP] 开始后台预热 AI 实验室全部模型 ...")
+        for name, svc in [
+            ("sensevoice", _SV),
+            ("emotion2vec", _EV),
+            ("text_emotion", _TE),
+            ("opensmile", _OS),
+        ]:
+            try:
+                svc.warmup()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[WARMUP] %s 预热失败: %s", name, e)
+        logger.info("[WARMUP] 后台预热完成")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[WARMUP] 预热流程异常: %s", e)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """服务启动后后台预热 AI 模型；仅真实服务器触发，测试导入不受影响。"""
+    threading.Thread(target=_background_warmup, daemon=True).start()
+    yield
+
+
+app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -150,6 +184,23 @@ app.include_router(admin.feedback_router, prefix="/api/v1")
 app.include_router(admin.stats_router, prefix="/api/v1")
 app.include_router(admin.config_router, prefix="/api/v1")
 app.include_router(admin.communities_router, prefix="/api/v1")
+
+# ─── AI 实验室：多模态音频分析 + AI 心理教练 ──────────────────────────
+app.include_router(ai_lab.router)
+app.include_router(ai_coach.router)
+logger.info("[INIT] AI 实验室路由已挂载（/api/analyze_audio, /api/ai_coach/chat）")
+
+# ─── AI 实验室：SocketIO 实时情绪识别 ────────────────────────────────
+sio = socketio.AsyncServer(
+    async_mode="asgi",
+    cors_allowed_origins="*",
+    logger=False,
+    engineio_logger=False,
+)
+socket_events.register_socket_events(sio, logger)
+
+# SocketIO 与 FastAPI 共用同一 ASGI 应用（uvicorn 需以 socket_app 启动）
+socket_app = socketio.ASGIApp(sio, app)
 
 
 @app.get("/health", tags=["system"])

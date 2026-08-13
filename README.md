@@ -49,7 +49,7 @@ python scripts/demo_seed.py
 
 # 7. 启动开发服务（127.0.0.1:8000）
 python scripts/run_dev.py
-# 或 uvicorn app.main:app --reload
+# 或 uvicorn app.main:socket_app --reload
 
 # 8. 跑测试
 pytest tests -q
@@ -156,13 +156,30 @@ pytest tests/test_auth.py -q   # 单模块
 
 ```bash
 # 生产：多 worker + HTTPS 反代
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+uvicorn app.main:socket_app --host 0.0.0.0 --port 8000 --workers 1
 ```
 
 - 生产环境配置：`DEBUG=false`、`COOKIE_SECURE=true`、显式 `CORS_ORIGINS`；
 - 多实例部署：`RATE_LIMIT_BACKEND=redis` 并配置 `REDIS_URL`（黑名单/首页缓存同样建议切 Redis，接口已抽象）；
 - Nginx 将 `/api` 反向代理到后端，静态资源交给前端静态托管/CDN；
 - 邮件：配置 SMTP 后 `EMAIL_ENABLED=true`；验证码在服务端校验（哈希存储、一次性、60s 冷却、5 次错误作废）。
+
+## AI 实验室（情绪识别 + AI 心理教练）
+
+Mind2/RelMind 已整体并入本仓库，不再单独运行：
+
+- SocketIO 实时情绪识别：`/socket.io/`（upload_frame → emotion_result），由 `app.services.ai_lab.socket_events` 实现；
+- 多模态音频分析：`POST /api/analyze_audio`、`GET /api/analyze_audio/config_check`、`POST /api/analyze_audio/warmup`；
+- AI 心理教练：`POST /api/ai_coach/chat`（DeepSeek，识别结果作为上下文引导）。
+
+启动注意：
+
+- 必须通过 `app.main:socket_app` 启动（FastAPI + SocketIO 共用 ASGI 应用），`scripts/run_dev.py` 已配置；
+- AI 实验室建议单进程运行（模型常驻内存约 3~4 GB，`--workers 1`）；
+- 首次启动会在后台自动预热模型（SenseVoice / emotion2vec / mDeBERTa / OpenSMILE），可通过 `config_check` 查看加载状态；
+- AI 教练需要 `.env` 中配置 `DEEPSEEK_API_KEY`（可选，未配置时该接口返回 503）。
+
+重型 AI 依赖（torch / tensorflow / funasr / opensmile / deepface）见 `requirements-ai.txt`。
 
 ## 常见问题
 
