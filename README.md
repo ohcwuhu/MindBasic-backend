@@ -5,7 +5,7 @@
 多模态情绪分析、DeepSeek AI 心理教练）。
 
 相关项目：前端仓库 `MindBasic-frontend`（开发地址 `http://127.0.0.1:5173`），
-AI 实验室页面为 `/ai-chat`（豆包式对话）与 `/ai-lab`（原实验面板）。
+AI 实验室页面为 `/ai-chat`（豆包式对话）与 `/video-call`（AI 视频通话）。
 
 ## 技术栈
 
