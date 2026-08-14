@@ -114,6 +114,8 @@ pytest tests -q
 | `DEEPSEEK_API_KEY` | 否 | DeepSeek Key，AI 心理教练；未配置时 `/api/ai_coach/chat` 返回 503 |
 | `SENSEVOICE_DEVICE` | 否 | SenseVoice 设备，留空自动检测（`cuda`/`cpu`） |
 | `DEEPSEEK_BASE_URL/MODEL/TIMEOUT` | 否 | DeepSeek 覆盖项（默认 api.deepseek.com / deepseek-chat / 90s） |
+| `TTS_VOICE` / `TTS_RATE` | 否 | 视频通话语音合成（edge-tts，免费）；默认 `zh-CN-XiaoxiaoNeural` / `+20%` |
+| `VLM_API_KEY` / `VLM_BASE_URL` / `VLM_MODEL` | 否 | 视频通话视觉理解（OpenAI 兼容 Vision API）；未配置时跳过视觉理解 |
 
 ## 目录结构
 
@@ -142,6 +144,9 @@ backend/
 │   │   │   ├── fusion_service.py        # 多模态融合引擎
 │   │   │   ├── facial_buffer.py         # 面部时序缓冲（per-sid）
 │   │   │   ├── socket_events.py         # SocketIO 事件注册
+│   │   │   ├── realtime_session.py      # 视频通话会话状态
+│   │   │   ├── tts_service.py           # edge-tts 语音合成
+│   │   │   ├── vlm_service.py           # VLM 视觉理解（可选）
 │   │   │   └── sensevoice/              # SenseVoice 远程代码
 │   │   └── …                # 业务服务（认证、预约、个案、社群、测评、邮件…）
 │   └── utils/               # 时间、格式化等工具
@@ -185,6 +190,7 @@ backend/
 - 文本情感：mDeBERTa-v3 零样本
 - 多模态融合：文本 + 语调 + 面部时序 → 融合情绪与置信度
 - AI 心理教练：DeepSeek 对话，自动携带识别上下文（表情/语调/转写/投入度）
+- AI 视频通话：实时语音对话 + edge-tts 语音回复 + 打断；配置 VLM Key 后支持视觉理解
 
 ## API 约定
 
@@ -233,6 +239,18 @@ backend/
 
 手动触发模型预热，返回各模型 `ok` 或失败原因。用于内存恢复后补加载。
 
+#### `POST /api/vc_audio_upload`
+
+视频通话音频上传。`multipart/form-data`：
+
+| 字段 | 说明 |
+| --- | --- |
+| `file` | 音频 Blob（webm/ogg/mp3/wav 等） |
+| `sid` | SocketIO 客户端 ID |
+
+返回 `{ ok, file_id, file_path, file_size }`；前端随后通过 `vc_audio_end` 携带 `file_id`
+交给视频通话管线处理（避免 socket 分片乱序）。
+
 #### `POST /api/ai_coach/chat`
 
 AI 心理教练对话。请求：
@@ -265,6 +283,22 @@ AI 心理教练对话。请求：
 | `emotion_result` | 后端 → 前端 | `{ timestamp, score, level, students, alert, emotions, processing_time_ms }` |
 | `emotion_error` | 后端 → 前端 | `{ error, message }` |
 | `upload_audio` | 前端 → 后端 | 预留事件（当前仅记录日志） |
+
+视频通话事件（`vc_*`，独立命名空间，不影响情绪识别）：
+
+| 事件 | 方向 | 说明 |
+| --- | --- | --- |
+| `vc_start` / `vc_stop` | 前端 → 后端 | 开始/结束视频通话会话 |
+| `vc_audio_chunk` / `vc_audio_end` | 前端 → 后端 | 音频分片/结束（`vc_audio_end` 携带 `file_id`） |
+| `vc_interrupt` | 前端 → 后端 | 用户打断（停止后续 TTS，不中断 LLM 生成） |
+| `vc_update_frame` / `vc_update_emotion` | 前端 → 后端 | 更新 VLM 画面帧 / 情绪上下文 |
+| `vc_clear_history` | 前端 → 后端 | 清空会话对话历史 |
+| `vc_state_change` | 后端 → 前端 | 状态切换（listening/thinking/speaking/idle） |
+| `vc_asr_result` / `vc_emotion_analysis` | 后端 → 前端 | 语音转写结果 / 情绪分析结果 |
+| `vc_llm_token` / `vc_llm_done` | 后端 → 前端 | LLM 流式 token / 完成 |
+| `vc_tts_start` / `vc_tts_chunk` / `vc_tts_done` | 后端 → 前端 | TTS 语音分句合成进度 |
+| `vc_vlm_result` | 后端 → 前端 | 视觉理解结果 |
+| `vc_interrupted` / `vc_error` | 后端 → 前端 | 打断确认 / 错误 |
 
 ## 数据库与迁移
 
