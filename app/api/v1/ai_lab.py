@@ -18,11 +18,14 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 import time
 import traceback
 from typing import Any
+
+_log = logging.getLogger("ai-lab")
 
 import anyio
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -357,3 +360,51 @@ async def warmup() -> JSONResponse:
         "warmup_results": results,
         "note": "通过 /api/analyze_audio/config_check 查看各模型 loaded 状态",
     })
+
+
+# ================================================================
+#  视频通话音频上传（给 socket 管线使用，避免大 base64 传输乱序）
+# ================================================================
+import uuid
+import shutil
+
+_VC_UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "vc_uploads")
+os.makedirs(_VC_UPLOAD_DIR, exist_ok=True)
+
+@router.post("/vc_audio_upload")
+async def vc_audio_upload(
+    file: UploadFile = File(...),
+    sid: str = Form(""),
+) -> JSONResponse:
+    """
+    视频通话音频上传接口。
+    前端将 Blob 音频文件通过 HTTP POST 上传，后端保存到临时目录并返回 file_id。
+    然后前端通过 socket 发送 vc_audio_end 时携带 file_id，
+    后端管线直接从磁盘读取文件，避免 base64 分片在 socket 中乱序。
+    """
+    try:
+        if not file.filename:
+            return JSONResponse(content={"error": "没有文件"}, status_code=400)
+
+        file_id = uuid.uuid4().hex
+        suffix = os.path.splitext(file.filename)[1] or ".webm"
+        if suffix not in (".webm", ".webma", ".ogg", ".mp3", ".wav", ".opus"):
+            suffix = ".webm"
+        dest_path = os.path.join(_VC_UPLOAD_DIR, f"{file_id}{suffix}")
+
+        with open(dest_path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+
+        file_size = os.path.getsize(dest_path)
+        _log.info("[VC Upload] sid=%s, file_id=%s, size=%dB, path=%s",
+                  sid, file_id, file_size, dest_path)
+
+        return JSONResponse(content={
+            "ok": True,
+            "file_id": file_id,
+            "file_path": dest_path,
+            "file_size": file_size,
+        })
+    except Exception as e:
+        _log.error("[VC Upload] 上传失败: %s", e, exc_info=True)
+        return JSONResponse(content={"error": str(e)}, status_code=500)

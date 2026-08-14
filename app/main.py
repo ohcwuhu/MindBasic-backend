@@ -40,7 +40,7 @@ access_logger = get_logger("mindbasic.access")
 
 
 def _background_warmup() -> None:
-    """后台预热 AI 模型（SenseVoice + emotion2vec + 文本情感 + OpenSMILE）。"""
+    """后台预热 AI 模型（SenseVoice + emotion2vec + 文本情感 + OpenSMILE + TTS + VLM）。"""
     try:
         from app.api.v1.ai_lab import _SV, _EV, _TE, _OS
 
@@ -55,6 +55,15 @@ def _background_warmup() -> None:
                 svc.warmup()
             except Exception as e:  # noqa: BLE001
                 logger.warning("[WARMUP] %s 预热失败: %s", name, e)
+
+        # 视频通话：TTS + VLM 预热
+        try:
+            from app.services.ai_lab import tts_service, vlm_service
+            tts_service.warmup()
+            vlm_service.warmup()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[WARMUP] TTS/VLM 预热失败: %s", e)
+
         logger.info("[WARMUP] 后台预热完成")
     except Exception as e:  # noqa: BLE001
         logger.warning("[WARMUP] 预热流程异常: %s", e)
