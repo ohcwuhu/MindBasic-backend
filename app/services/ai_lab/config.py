@@ -32,8 +32,18 @@ INFERENCE_TIMEOUT_OPENSMILE: int = int(os.environ.get("RELMIND_OPENSMILE_TIMEOUT
 # 当前运行的 Python 解释器（诊断日志用）
 CURRENT_PYTHON: str = sys.executable
 
-# DeepSeek API（AI 心理教练）
+# DeepSeek API（AI 心理教练 + 视频通话 LLM）
 DEEPSEEK_API_KEY: str = settings.deepseek_api_key
 DEEPSEEK_BASE_URL: str = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_MODEL: str = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 DEEPSEEK_TIMEOUT: int = int(os.environ.get("DEEPSEEK_TIMEOUT", "90"))
+
+# TTS 语音合成（edge-tts，免费无需 API Key）
+TTS_VOICE: str = os.environ.get("TTS_VOICE", "zh-CN-XiaoxiaoNeural")
+TTS_RATE: str = os.environ.get("TTS_RATE", "+20%")
+
+# VLM 视觉理解（OpenAI 兼容 Vision API，可选）
+# 未配置时视频通话跳过视觉理解，不影响其他功能
+VLM_API_KEY: str = os.environ.get("VLM_API_KEY", "")
+VLM_BASE_URL: str = os.environ.get("VLM_BASE_URL", "")
+VLM_MODEL: str = os.environ.get("VLM_MODEL", "")

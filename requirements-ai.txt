@@ -8,3 +8,4 @@ deepface>=0.0.99
 opencv-python>=4.9.0
 imageio-ffmpeg>=0.6.0
 soundfile>=0.13.0
+edge-tts>=6.1.0
