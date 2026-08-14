@@ -29,7 +29,9 @@ from app.api.v1 import (
     users,
 )
 from app.api.v1 import ai_coach, ai_lab
+from app.api.v1 import chat as chat_api
 from app.services.ai_lab import socket_events
+from app.services.chat_socket import register_chat_socket_events
 from app.core.config import cors_origin_list, settings
 from app.core.exceptions import AppError
 from app.core.logging import get_logger, setup_logging
@@ -197,6 +199,7 @@ app.include_router(admin.communities_router, prefix="/api/v1")
 # ─── AI 实验室：多模态音频分析 + AI 心理教练 ──────────────────────────
 app.include_router(ai_lab.router)
 app.include_router(ai_coach.router)
+app.include_router(chat_api.router, prefix="/api/v1")
 logger.info("[INIT] AI 实验室路由已挂载（/api/analyze_audio, /api/ai_coach/chat）")
 
 # ─── AI 实验室：SocketIO 实时情绪识别 ────────────────────────────────
@@ -207,6 +210,7 @@ sio = socketio.AsyncServer(
     engineio_logger=False,
 )
 socket_events.register_socket_events(sio, logger)
+register_chat_socket_events(sio, logger)
 
 # SocketIO 与 FastAPI 共用同一 ASGI 应用（uvicorn 需以 socket_app 启动）
 socket_app = socketio.ASGIApp(sio, app)

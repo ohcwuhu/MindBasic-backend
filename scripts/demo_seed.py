@@ -45,7 +45,7 @@ def main() -> None:
             phone="13900000001",
             password_hash=bcrypt.hashpw(b"Demo123456", bcrypt.gensalt()).decode(),
             nickname="林老师",
-            role="USER",
+            role="COACH",
             status="ENABLED",
             privacy_agreed=True,
         )
