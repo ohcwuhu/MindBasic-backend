@@ -6,8 +6,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 import socketio
+from sqlalchemy import text
 
 from app.api.v1 import (
     admin,
@@ -39,8 +40,10 @@ from app.services.ai_lab import socket_events
 from app.services.chat_socket import register_chat_socket_events
 from app.core.config import cors_origin_list, settings
 from app.core.exceptions import AppError
+from app.core.metrics import HTTP_DURATION, HTTP_REQUESTS, metrics_body
 from app.core.logging import get_logger, setup_logging
 from app.core.scheduler import shutdown_scheduler, start_scheduler
+from app.db.session import AsyncSessionLocal
 
 setup_logging()
 logger = get_logger("mindbasic")
@@ -118,6 +121,34 @@ async def add_trace_id(request: Request, call_next):
             }
         },
     )
+    return response
+
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(self), microphone=(self)"
+    if not settings.debug:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+
+@app.middleware("http")
+async def add_metrics(request: Request, call_next):
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        route = getattr(request.scope.get("route"), "path", request.url.path)
+        HTTP_REQUESTS.labels(request.method, route, "500").inc()
+        HTTP_DURATION.labels(request.method, route).observe(time.perf_counter() - start)
+        raise
+    route = getattr(request.scope.get("route"), "path", request.url.path)
+    HTTP_REQUESTS.labels(request.method, route, str(response.status_code)).inc()
+    HTTP_DURATION.labels(request.method, route).observe(time.perf_counter() - start)
     return response
 
 
@@ -233,3 +264,20 @@ socket_app = socketio.ASGIApp(sio, app)
 @app.get("/health", tags=["system"])
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/health/ready", tags=["system"])
+async def health_ready() -> JSONResponse:
+    """就绪探针：数据库连通性检查。"""
+    try:
+        async with AsyncSessionLocal() as db:
+            await db.execute(text("SELECT 1"))
+    except Exception:
+        return JSONResponse({"status": "degraded", "db": "down"}, status_code=503)
+    return JSONResponse({"status": "ok", "db": "ok"})
+
+
+@app.get("/metrics", include_in_schema=False, tags=["system"])
+async def metrics() -> Response:
+    body, content_type = metrics_body()
+    return Response(content=body, media_type=content_type)

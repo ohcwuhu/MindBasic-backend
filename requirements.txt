@@ -14,3 +14,4 @@ APScheduler>=3.10,<4
 redis>=5.0.0
 bleach>=6.0.0
 asyncmy>=0.2.9
+prometheus-client>=0.20.0

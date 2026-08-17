@@ -4,6 +4,7 @@
 #
 #    pip-compile --no-annotate --output-file=requirements.lock --strip-extras requirements.txt
 #
+--index-url https://pypi.tuna.tsinghua.edu.cn/simple
 
 alembic==1.19.1
 annotated-doc==0.0.5
@@ -24,6 +25,7 @@ httptools==0.8.0
 idna==3.18
 mako==1.4.1
 markupsafe==3.0.3
+prometheus-client==0.26.0
 pycparser==3.0
 pydantic==2.13.4
 pydantic-core==2.46.4
