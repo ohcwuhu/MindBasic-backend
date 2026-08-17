@@ -201,14 +201,22 @@ def register_socket_events(sio, log):
 
     # ─── 连接事件：初始化客户端独立状态 ────────────────────────────
     @sio.on("connect")
-    async def handle_connect(sid, environ):
+    async def handle_connect(sid, environ, auth):
+        # 复用 /chat 命名空间的 JWT 校验：未登录连接直接拒绝
+        from app.services.chat_socket import _auth_user
+
+        user_id = await _auth_user(auth)
+        if user_id is None:
+            log.warning("[CONNECT] 拒绝未登录连接 sid=%s", sid)
+            return False
         clients[sid] = {
+            "user_id": user_id,
             "last_frame_time": 0.0,    # 上次成功推理的时间戳（节流用）
             "connect_at": time.time(), # 连接建立时间（日志用）
         }
         # 初始化面部时序缓冲（供 HTTP 层 /api/analyze_audio 融合时查询）
         facial_buffer.init_client(sid)
-        log.info(f"[CONNECT] {sid} | 当前在线客户端数: {len(clients)}")
+        log.info(f"[CONNECT] {sid} | user={user_id} | 当前在线客户端数: {len(clients)}")
 
     # ─── 断开事件：清理客户端状态与资源 ────────────────────────────
     # 说明：当前未启用 per-client 后台计时器；如后续扩展音频缓冲、
