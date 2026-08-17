@@ -22,7 +22,7 @@ AI 实验室页面为 `/ai-chat`（豆包式对话）与 `/video-call`（AI 视�
 | 邮件 | smtplib | 邮箱验证码（登录/找回密码/绑定邮箱），465 SSL / 587 STARTTLS |
 | AI 实验室 | funasr / opensmile / deepface / torch / tensorflow | 语音转写、语调情感、表情识别、融合分析 |
 | AI 教练 | DeepSeek Chat API | 以识别结果为上下文做心理教练式引导 |
-| 测试 | pytest | 集成测试直连开发库，73 项覆盖核心链路 |
+| 测试 | pytest | 集成测试直连开发库，80 项覆盖核心链路 |
 
 ## 架构总览
 
@@ -116,6 +116,12 @@ pytest tests -q
 | `DEEPSEEK_BASE_URL/MODEL/TIMEOUT` | 否 | DeepSeek 覆盖项（默认 api.deepseek.com / deepseek-chat / 90s） |
 | `TTS_VOICE` / `TTS_RATE` | 否 | 视频通话语音合成（edge-tts，免费）；默认 `zh-CN-XiaoxiaoNeural` / `+20%` |
 | `VLM_API_KEY` / `VLM_BASE_URL` / `VLM_MODEL` | 否 | 视频通话视觉理解（OpenAI 兼容 Vision API）；未配置时跳过视觉理解 |
+| `CHAT_FREE_REPLY_LIMIT` | 否 | 免费沟通教练回复条数，默认 3 |
+| `PAYMENT_MODE` | 否 | `mock`（余额/模拟支付，默认）/ `disabled` |
+| `ORDER_PAY_TIMEOUT_MIN` | 否 | 预约订单支付时限（分钟），默认 15，超时释放时段 |
+| `APPT_REFUND_NEAR_PERCENT` | 否 | 临近取消按比例退款，默认 50 |
+| `APPT_FREE_CANCEL_HOURS` / `APPT_NEAR_CANCEL_HOURS` / `APPT_NO_SHOW_GRACE_MIN` | 否 | 履约规则窗口（免费取消 / 临近 / 未赴约判定） |
+| `CRISIS_KEYWORDS` | 否 | 危机检测关键词（逗号分隔），默认内置列表 |
 
 ## 目录结构
 
@@ -124,10 +130,11 @@ backend/
 ├── alembic/                 # 迁移脚本（版本链 + 种子数据）
 ├── app/
 │   ├── api/v1/              # 路由层
-│   │   ├── auth.py users.py coaches.py coach.py appointments.py
+│   │   ├── auth.py users.py coaches.py coach.py appointments.py orders.py wallet.py
 │   │   ├── articles.py emotion_journals.py self_coaching.py checkins.py
 │   │   ├── communities.py growth_assessments.py notifications.py files.py
 │   │   ├── home.py platform.py tags.py admin.py
+│   │   ├── admin_orders.py admin_crisis.py admin_audit.py   # 支付/危机/审计管理
 │   │   ├── ai_lab.py        # 多模态音频分析（/api/analyze_audio*）
 │   │   └── ai_coach.py      # AI 心理教练（/api/ai_coach/chat）
 │   ├── core/                # 配置、异常、安全、限流、缓存、日志、黑名单
@@ -166,11 +173,13 @@ backend/
 
 - **账号**：手机号注册/登录、邮箱验证码登录、找回密码、绑定/换绑邮箱、Token 刷新、登出、注销、Access Token 黑名单
 - **自助工具**：自我教练（5 模板四步流程 + 成长行动卡）、情绪日记（预设话术 + 趋势 + 月度心情日历）
-- **教练服务**：教练目录/详情/评价、在线预约（防超卖 + 幂等键）、我的预约、评价
+- **教练服务**：教练目录/详情/评价、在线预约（防超卖 + 幂等键）、**付费锁定（余额/模拟支付、15 分钟时限、取消退款规则）**、我的预约、评价
+- **钱包**：余额、模拟充值、流水
 - **科普**：文章分类/详情/收藏、首页聚合（匿名缓存）
 - **成长体系**：每日打卡、排行榜、勋章、成长测评（资源导向，不诊断）
 - **社群**：主题社群、加入/退出、帖子/评论/点赞
-- **通知**：站内消息（预约、审核等）
+- **通知**：站内消息（预约、审核、危机预警等）
+- **数据与隐私**：数据导出（JSON 保留 7 天）、注销删除（密码确认）、服务协议确认（版本留痕）
 
 ### 教练端
 
@@ -180,7 +189,10 @@ backend/
 ### 管理后台
 
 - 用户（含注册时间筛选）、教练审核、文章/分类/轮播/标签/话术库
-- 平台配置（心理援助热线/免责声明）、社群上下架、概览统计
+- 平台配置（心理援助热线/免责声明/服务协议/AI 标识）、社群上下架、概览统计
+- **订单管理**（筛选/退款）、**余额发放**
+- **危机处理**（队列/接管/跟进/结案/时间线留痕）
+- **审计日志**（敏感操作筛选查询）
 
 ### AI 实验室
 
@@ -311,7 +323,7 @@ AI 心理教练对话。请求：
 
 ```bash
 cd backend
-pytest tests -q                    # 全量 73 项
+pytest tests -q                    # 全量 80 项
 pytest tests/test_auth.py -q       # 单模块
 ```
 
@@ -383,6 +395,7 @@ uvicorn app.main:socket_app --host 0.0.0.0 --port 8000 --workers 1
 - **语音转文字失败**：先看 `/api/analyze_audio/config_check` 中 `sensevoice.loaded`；
   未加载则内存不足或首次下载未完成，释放内存后调 `/api/analyze_audio/warmup`。
 - **AI 教练返回 503**：`.env` 未配置 `DEEPSEEK_API_KEY`，或 Key 失效（查看响应 detail）。
+- **AI 回复报 `[llm] Insufficient Balance`**：DeepSeek 账号余额不足，充值或更换 Key 即可，非程序问题。
 - **服务进程被系统杀掉**：多为内存耗尽（模型 + 系统占用超限），关闭大内存程序或增加内存后再启动。
 - **测试退出时 torch 日志报错**：已通过懒加载修复；确认 `app.main` 导入时不应加载 torch/tensorflow。
 - **时区**：应用按 UTC 存储（`utcnow_naive`），数据库服务器时间可能为本地时间；涉及跨时区比较的新逻辑请统一使用 `utcnow_naive`。
