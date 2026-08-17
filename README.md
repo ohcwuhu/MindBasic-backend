@@ -94,6 +94,8 @@ pytest tests -q
 
 - OpenAPI 文档：`http://127.0.0.1:8000/docs`
 - 健康检查：`http://127.0.0.1:8000/health`
+- 就绪探针（含数据库连通性）：`http://127.0.0.1:8000/health/ready`
+- Prometheus 指标：`http://127.0.0.1:8000/metrics`
 - SocketIO：`http://127.0.0.1:8000/socket.io/`
 - AI 模型状态：`http://127.0.0.1:8000/api/analyze_audio/config_check`
 
@@ -384,6 +386,12 @@ uvicorn app.main:socket_app --host 0.0.0.0 --port 8000 --workers 1
   - `/api` → 后端；
   - `/socket.io` → 后端，并配置 WebSocket 升级头（`Upgrade` / `Connection`）；
 - 静态资源交给前端静态托管/CDN；
+- 容器化：根目录 `docker-compose.yml` 一键启动 MySQL + 后端 + 前端（Nginx 代理 `/api` 与 `/socket.io`），
+  后端镜像启动前自动执行迁移；`uploads/`、`exports/` 挂载持久化盘；
+- 备份：`scripts/backup.sh` 备份数据库 + uploads + exports，建议 cron 每日执行并保留 14 天；
+- 可观测性：`/metrics` 暴露 Prometheus 指标（请求量/耗时，按路由模板聚合），配合 `up` 探针与
+  `http_request_duration_seconds` 配置告警；所有响应默认带安全头（nosniff / DENY / Referrer-Policy），
+  生产（`DEBUG=false`）额外输出 HSTS；
 - 邮件：配置 SMTP 后 `EMAIL_ENABLED=true`；验证码在服务端校验（哈希存储、一次性、60s 冷却、5 次错误作废）；
 - AI 实验室服务器建议内存 ≥ 8 GB 可用，并保证 C 盘/系统盘留有足够空间给页面文件与模型缓存。
 
