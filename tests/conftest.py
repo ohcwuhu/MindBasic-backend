@@ -1,8 +1,12 @@
+import os
 import time
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
+
+# 测试环境关闭生产调度器，避免定时任务在测试进程内触发
+os.environ["SCHEDULER_ENABLED"] = "false"
 
 from app.db.session import SessionLocal
 from app.main import app
