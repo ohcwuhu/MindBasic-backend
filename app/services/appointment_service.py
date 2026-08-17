@@ -12,12 +12,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import AppError
 from app.models.coach import Appointment, AppointmentEvent, CoachProfile, CoachSlot, Service
 from app.models.user import User
-from app.models.v1_1 import ClientRelation
-from app.models.v1_1 import Review
+from app.models.v1_1 import ClientRelation, Order, Payment, Refund, Review
 from app.services.notification_service import notify
 from app.utils.format import mask_phone
 from app.schemas.appointment import AppointmentCreateIn
 from app.services.chat_service import unlock_conversation
+from app.services.order_service import (
+    APPT_REFUND_NEAR_PERCENT,
+    close_unpaid_order,
+    generate_order_no,
+    get_appointment_order,
+    order_pay_expire_at,
+    refund_paid_order,
+)
 from app.utils.time import to_iso, utcnow_naive
 
 
@@ -161,13 +168,27 @@ async def create_appointment(
     )
     db.add(appointment)
     await db.flush()
+    order = Order(
+        order_no=generate_order_no(),
+        type="APPOINTMENT",
+        user_id=user.id,
+        coach_id=coach.id,
+        service_id=service.id,
+        appointment_id=appointment.id,
+        amount_in_cents=service.price_in_cents,
+        status="CREATED",
+        expire_at=order_pay_expire_at(),
+    )
+    db.add(order)
+    await db.flush()
+    appointment.order_id = order.id
     await _record_event(db, appointment.id, user.id, "USER", "BOOKED", "创建预约")
     await notify(
         db,
         coach.user_id,
         "APPOINTMENT",
         "收到新预约",
-        f"{user.nickname}提交了新预约，请尽快确认。",
+        f"{user.nickname}提交了新预约（待支付），请在用户完成支付后确认。",
     )
     try:
         await db.commit()
@@ -195,6 +216,7 @@ async def get_appointment_ctx(db: AsyncSession, appointment: Appointment) -> dic
     reviewed = await db.scalar(select(Review.id).where(Review.appointment_id == appointment.id)) is not None
     effective = _effective_status(appointment, slot)
     window = _cancel_window(slot)
+    order = await get_appointment_order(db, appointment)
     return {
         "id": appointment.id,
         "appointment_no": appointment.appointment_no,
@@ -223,6 +245,10 @@ async def get_appointment_ctx(db: AsyncSession, appointment: Appointment) -> dic
         "cancel_window": window,
         "can_cancel": effective in ("PENDING", "CONFIRMED") and window != "closed",
         "reviewed": reviewed,
+        "payment_status": order.status if order else "NONE",
+        "order_no": order.order_no if order else None,
+        "amount_in_cents": order.amount_in_cents if order else None,
+        "pay_expire_at": to_iso(order.expire_at) if order else None,
         "created_at": to_iso(appointment.created_at),
     }
 
@@ -242,6 +268,10 @@ async def my_appointments_to_out(db: AsyncSession, appointments: list[Appointmen
     services = {s.id: s for s in await db.scalars(select(Service).where(Service.id.in_(service_ids)))}
     slots = {s.id: s for s in await db.scalars(select(CoachSlot).where(CoachSlot.id.in_(slot_ids)))}
     reviewed_ids = set(await db.scalars(select(Review.appointment_id).where(Review.appointment_id.in_(appointment_ids))))
+    orders = {
+        o.appointment_id: o
+        for o in await db.scalars(select(Order).where(Order.appointment_id.in_(appointment_ids)))
+    }
 
     items: list[dict] = []
     for a in appointments:
@@ -251,6 +281,7 @@ async def my_appointments_to_out(db: AsyncSession, appointments: list[Appointmen
         slot = slots.get(a.slot_id)
         effective = _effective_status(a, slot)
         window = _cancel_window(slot)
+        order = orders.get(a.id)
         items.append({
             "id": a.id,
             "appointment_no": a.appointment_no,
@@ -279,6 +310,10 @@ async def my_appointments_to_out(db: AsyncSession, appointments: list[Appointmen
             "cancel_window": window,
             "can_cancel": effective in ("PENDING", "CONFIRMED") and window != "closed",
             "reviewed": a.id in reviewed_ids,
+            "payment_status": order.status if order else "NONE",
+            "order_no": order.order_no if order else None,
+            "amount_in_cents": order.amount_in_cents if order else None,
+            "pay_expire_at": to_iso(order.expire_at) if order else None,
             "created_at": to_iso(a.created_at),
         })
     return items
@@ -329,6 +364,22 @@ async def cancel_my_appointment(
     appointment.status = "CANCELLED"
     appointment.cancel_by = user.id
     appointment.cancel_reason = reason or ("临近时段取消" if window == "near" else "用户取消")
+    refund_note = None
+    order = await get_appointment_order(db, appointment)
+    if order is not None:
+        if order.status == "CREATED":
+            await close_unpaid_order(db, order)
+        elif order.status == "PAID":
+            refund_amount = (
+                order.amount_in_cents
+                if window == "free"
+                else int(order.amount_in_cents * APPT_REFUND_NEAR_PERCENT / 100)
+            )
+            await refund_paid_order(db, order, refund_amount, f"用户取消（{window}窗口）")
+            if refund_amount < order.amount_in_cents:
+                refund_note = f"临近取消按规则部分退款，已退 {refund_amount / 100:.2f} 元到余额"
+            else:
+                refund_note = "已全额退款到余额"
     await _record_event(
         db,
         appointment.id,
@@ -348,6 +399,14 @@ async def cancel_my_appointment(
         "预约已取消",
         f"用户取消了预约：{appointment.cancel_reason}",
     )
+    if refund_note:
+        await notify(
+            db,
+            appointment.user_id,
+            "APPOINTMENT",
+            "退款已到账",
+            refund_note,
+        )
     await db.commit()
     await db.refresh(appointment)
     return appointment
@@ -410,6 +469,7 @@ async def coach_appointment_to_out(db: AsyncSession, appointment: Appointment) -
     service = await db.get(Service, appointment.service_id)
     slot = await db.get(CoachSlot, appointment.slot_id)
     effective = _effective_status(appointment, slot)
+    order = await get_appointment_order(db, appointment)
     return {
         "id": appointment.id,
         "appointment_no": appointment.appointment_no,
@@ -436,6 +496,7 @@ async def coach_appointment_to_out(db: AsyncSession, appointment: Appointment) -
         "cancel_deadline_at": to_iso(appointment.cancel_deadline_at),
         "no_show_at": to_iso(appointment.no_show_at),
         "cancel_window": _cancel_window(slot),
+        "payment_status": order.status if order else "NONE",
         "created_at": to_iso(appointment.created_at),
         "completed_at": to_iso(appointment.completed_at),
     }
@@ -452,6 +513,10 @@ async def coach_appointments_to_out(db: AsyncSession, appointments: list[Appoint
     users = {u.id: u for u in await db.scalars(select(User).where(User.id.in_(user_ids)))}
     services = {s.id: s for s in await db.scalars(select(Service).where(Service.id.in_(service_ids)))}
     slots = {s.id: s for s in await db.scalars(select(CoachSlot).where(CoachSlot.id.in_(slot_ids)))}
+    orders = {
+        o.appointment_id: o
+        for o in await db.scalars(select(Order).where(Order.appointment_id.in_([a.id for a in appointments])))
+    }
 
     items: list[dict] = []
     for a in appointments:
@@ -459,6 +524,7 @@ async def coach_appointments_to_out(db: AsyncSession, appointments: list[Appoint
         service = services.get(a.service_id)
         slot = slots.get(a.slot_id)
         effective = _effective_status(a, slot)
+        order = orders.get(a.id)
         items.append({
             "id": a.id,
             "appointment_no": a.appointment_no,
@@ -485,6 +551,7 @@ async def coach_appointments_to_out(db: AsyncSession, appointments: list[Appoint
             "cancel_deadline_at": to_iso(a.cancel_deadline_at),
             "no_show_at": to_iso(a.no_show_at),
             "cancel_window": _cancel_window(slot),
+            "payment_status": order.status if order else "NONE",
             "created_at": to_iso(a.created_at),
             "completed_at": to_iso(a.completed_at),
         })
@@ -495,6 +562,9 @@ async def confirm_appointment(db: AsyncSession, coach_profile_id: int, appointme
     appointment = await get_coach_appointment_or_404(db, coach_profile_id, appointment_id)
     if appointment.status != "PENDING":
         raise AppError(409, "INVALID_STATE_TRANSITION", "仅待确认预约可确认")
+    order = await get_appointment_order(db, appointment)
+    if order is not None and order.status != "PAID":
+        raise AppError(402, "PAYMENT_REQUIRED", "该预约尚未支付，请先完成支付")
     appointment.status = "CONFIRMED"
     coach_profile = await db.get(CoachProfile, coach_profile_id)
     coach_user = await db.get(User, coach_profile.user_id) if coach_profile else None
@@ -519,6 +589,19 @@ async def cancel_coach_appointment(
     appointment.status = "CANCELLED"
     appointment.cancel_reason = reason
     appointment.cancel_by = coach_user_id
+    order = await get_appointment_order(db, appointment)
+    if order is not None:
+        if order.status == "PAID":
+            await refund_paid_order(db, order, order.amount_in_cents, "教练取消")
+            await notify(
+                db,
+                appointment.user_id,
+                "APPOINTMENT",
+                "退款已到账",
+                "教练取消预约，已全额退款到余额。",
+            )
+        elif order.status == "CREATED":
+            await close_unpaid_order(db, order)
     await _record_event(
         db,
         appointment.id,
@@ -562,6 +645,20 @@ async def reschedule_appointment(
     if _cancel_window(old_slot) == "closed":
         raise AppError(409, "APPOINTMENT_CANCEL_CLOSED", "已进入临近时段，请联系教练或客服处理")
 
+    order = await get_appointment_order(db, appointment)
+    if order is not None:
+        if order.status == "PAID":
+            await refund_paid_order(db, order, order.amount_in_cents, "改期原单退款")
+            await notify(
+                db,
+                appointment.user_id,
+                "APPOINTMENT",
+                "退款已到账",
+                "改期原预约已全额退款到余额，新预约请重新支付。",
+            )
+        elif order.status == "CREATED":
+            await close_unpaid_order(db, order)
+
     coach = await db.get(CoachProfile, appointment.coach_id)
     service = await db.get(Service, service_id or appointment.service_id)
     if service is None or service.coach_id != coach.id or not service.is_enabled:
@@ -598,6 +695,20 @@ async def reschedule_appointment(
     )
     db.add(new_appointment)
     await db.flush()
+    new_order = Order(
+        order_no=generate_order_no(),
+        type="APPOINTMENT",
+        user_id=user.id,
+        coach_id=coach.id,
+        service_id=service.id,
+        appointment_id=new_appointment.id,
+        amount_in_cents=service.price_in_cents,
+        status="CREATED",
+        expire_at=order_pay_expire_at(),
+    )
+    db.add(new_order)
+    await db.flush()
+    new_appointment.order_id = new_order.id
     await _record_event(db, new_appointment.id, user.id, "USER", "BOOKED", "改期后重新预约")
     coach_user = await db.get(User, coach.user_id)
     await notify(

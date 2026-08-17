@@ -52,6 +52,10 @@ class AppointmentOut(ApiModel):
     cancel_window: Literal["free", "near", "closed"]
     can_cancel: bool
     reviewed: bool
+    payment_status: Literal["NONE", "CREATED", "PAID", "REFUNDED", "CLOSED"] = "NONE"
+    order_no: str | None = None
+    amount_in_cents: int | None = None
+    pay_expire_at: str | None = None
     created_at: str
 
 
@@ -67,6 +71,7 @@ class CoachAppointmentOut(ApiModel):
     cancel_deadline_at: str | None = None
     no_show_at: str | None = None
     cancel_window: Literal["free", "near", "closed"]
+    payment_status: Literal["NONE", "CREATED", "PAID", "REFUNDED", "CLOSED"] = "NONE"
     created_at: str
     completed_at: str | None = None
 
