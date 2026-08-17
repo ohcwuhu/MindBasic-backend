@@ -13,6 +13,7 @@ from app.models.v1_1 import Order
 from app.schemas.base import ApiModel
 from app.schemas.order import WalletGrantIn
 from app.services.notification_service import notify
+from app.services.audit_service import record_audit
 from app.services.order_service import refund_paid_order
 from app.services.wallet_service import credit_wallet
 from app.utils.format import mask_phone
@@ -84,6 +85,16 @@ async def admin_refund_order(
     if order is None:
         raise AppError(404, "ORDER_NOT_FOUND", "订单不存在")
     order = await refund_paid_order(db, order, order.amount_in_cents, body.reason or "管理员手动退款")
+    await record_audit(
+        db,
+        actor_user_id=admin.id,
+        actor_role="ADMIN",
+        action="ADMIN_ORDER_REFUND",
+        target_type="ORDER",
+        target_id=order.id,
+        detail={"order_no": order.order_no, "amount_in_cents": order.amount_in_cents},
+        ip=request.client.host if request.client else None,
+    )
     if order.appointment_id is not None:
         appointment = await db.get(Appointment, order.appointment_id)
         if appointment is not None and appointment.status in ("PENDING", "CONFIRMED"):
@@ -124,6 +135,16 @@ async def admin_grant_wallet(
         body.amount_in_cents,
         "ADMIN_GRANT",
         note=body.note or "管理员发放",
+    )
+    await record_audit(
+        db,
+        actor_user_id=admin.id,
+        actor_role="ADMIN",
+        action="ADMIN_WALLET_GRANT",
+        target_type="USER",
+        target_id=body.user_id,
+        detail={"amount_in_cents": body.amount_in_cents, "balance_in_cents": wallet.balance_in_cents},
+        ip=request.client.host if request.client else None,
     )
     await db.commit()
     return ok(

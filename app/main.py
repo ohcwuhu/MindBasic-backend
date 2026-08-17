@@ -11,6 +11,7 @@ import socketio
 
 from app.api.v1 import (
     admin,
+    admin_audit,
     admin_orders,
     appointments,
     articles,
@@ -202,6 +203,7 @@ app.include_router(orders.router, prefix="/api/v1")
 app.include_router(wallet.router, prefix="/api/v1")
 app.include_router(admin_orders.router, prefix="/api/v1")
 app.include_router(admin_orders.wallet_router, prefix="/api/v1")
+app.include_router(admin_audit.router, prefix="/api/v1")
 
 # ─── AI 实验室：多模态音频分析 + AI 心理教练 ──────────────────────────
 app.include_router(ai_lab.router)

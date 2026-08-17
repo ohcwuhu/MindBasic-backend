@@ -77,3 +77,7 @@ class ResetPasswordIn(ApiModel):
     email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=255)
     code: str = Field(pattern=r"^\d{6}$")
     new_password: str = Field(min_length=8, max_length=64)
+
+
+class DeleteAccountIn(ApiModel):
+    password: str = Field(min_length=1, max_length=64)
