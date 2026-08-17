@@ -10,6 +10,7 @@ from app.api.deps import (
     get_optional_user,
 )
 from app.api.response import ok, paginated
+from app.core.rate_limit import rate_limit
 from app.models.coach import CoachProfile
 from app.models.user import User
 from app.schemas.community import (
@@ -147,6 +148,7 @@ async def post_create(
     request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_db),
+    _limiter: None = Depends(rate_limit("community_post", 10, 60)),
 ) -> dict:
     return ok(
         CommunityPostOut(**await create_post(db, user, community_id, body)).model_dump(by_alias=True),
@@ -210,6 +212,7 @@ async def comment_create(
     request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_db),
+    _limiter: None = Depends(rate_limit("community_comment", 20, 60)),
 ) -> dict:
     return ok(
         CommunityCommentOut(**await create_comment(db, user, post_id, body.content)).model_dump(by_alias=True),

@@ -28,9 +28,11 @@ from typing import Any
 _log = logging.getLogger("ai-lab")
 
 import anyio
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
+from app.api.deps import get_current_user, require_role
+from app.models.user import User
 from app.services.ai_lab import config
 
 # ============================================================
@@ -130,6 +132,7 @@ def _convert_opensmile_result(os_result: dict) -> dict:
 # ============================================================
 @router.post("/analyze_audio")
 async def analyze_audio(
+    user: User = Depends(get_current_user),
     file: UploadFile = File(...),
     sid: str = Form(""),
     record_start_ts: float = Form(0.0),   # 前端 Date.now() 毫秒级
@@ -325,7 +328,9 @@ async def analyze_audio(
 #  辅助接口：/api/analyze_audio/config_check
 # ============================================================
 @router.get("/analyze_audio/config_check")
-async def config_check() -> JSONResponse:
+async def config_check(
+    admin: User = Depends(require_role("ADMIN")),
+) -> JSONResponse:
     """检查所有常驻服务的加载状态。"""
     return JSONResponse(content={
         "sensevoice": _SV.get_status(),
@@ -342,7 +347,9 @@ async def config_check() -> JSONResponse:
 #  辅助接口：/api/analyze_audio/warmup
 # ============================================================
 @router.post("/analyze_audio/warmup")
-async def warmup() -> JSONResponse:
+async def warmup(
+    admin: User = Depends(require_role("ADMIN")),
+) -> JSONResponse:
     """
     主动预热所有模型（SenseVoice + emotion2vec+ + 文本情感 + OpenSMILE）。
     建议在后端启动后调用一次，避免第一个用户请求等待。
@@ -373,6 +380,7 @@ os.makedirs(_VC_UPLOAD_DIR, exist_ok=True)
 
 @router.post("/vc_audio_upload")
 async def vc_audio_upload(
+    user: User = Depends(get_current_user),
     file: UploadFile = File(...),
     sid: str = Form(""),
 ) -> JSONResponse:

@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_async_db, get_current_user
 from app.api.response import ok, paginated
 from app.core.exceptions import AppError
+from app.core.rate_limit import rate_limit
 from app.core.security import verify_password
 from app.models.user import User
 from app.schemas.auth import ChangePasswordIn, DeleteAccountIn, EmailBindIn, UserPatchIn
@@ -134,6 +135,7 @@ async def create_my_data_export(
     request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_db),
+    _limiter: None = Depends(rate_limit("data_export", 3, 3600)),
 ) -> dict:
     record = await create_data_export(db, user)
     await record_audit(

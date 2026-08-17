@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_async_db, get_current_user, require_role
 from app.api.response import ok, paginated
+from app.core.rate_limit import rate_limit
 from app.models.user import User
 from app.schemas.order import OrderOut, PayOrderIn
 from app.services.order_service import (
@@ -25,6 +26,7 @@ async def pay_order_route(
     request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_db),
+    _limiter: None = Depends(rate_limit("order_pay", 10, 60)),
 ) -> dict:
     order = await pay_order(db, user, order_no, body.method)
     return ok(OrderOut(**await order_to_out(db, order)).model_dump(by_alias=True), trace_id=request.state.trace_id)

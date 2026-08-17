@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_async_db, get_current_user
 from app.api.response import ok, paginated
+from app.core.rate_limit import rate_limit
 from app.models.user import User
 from app.schemas.order import TopupIn, WalletOut, WalletTransactionOut
 from app.services.wallet_service import (
@@ -46,6 +47,7 @@ async def topup_wallet(
     request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_db),
+    _limiter: None = Depends(rate_limit("wallet_topup", 5, 60)),
 ) -> dict:
     """阶段一：模拟充值，直接到账余额（后续接真支付后改为创建充值单）。"""
     wallet = await credit_wallet(

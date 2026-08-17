@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_async_db, get_current_user
 from app.api.response import ok
+from app.core.rate_limit import rate_limit
 from app.models.user import User
 from app.schemas.chat import SendMessageIn, StartConversationIn
 from app.services.chat_service import (
@@ -63,6 +64,7 @@ async def create_message(
     request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_db),
+    _limiter: None = Depends(rate_limit("chat_send", 30, 60)),
 ) -> dict:
     msg = await send_message(db, user.id, conversation_id, body.content.strip())
     return ok(message_to_out(msg), trace_id=request.state.trace_id)

@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_async_db, get_current_user, get_optional_user
 from app.api.response import ok
 from app.core.exceptions import AppError
+from app.core.rate_limit import rate_limit
 from app.models.file import FileUpload
 from app.models.user import User
 
@@ -34,6 +35,7 @@ async def upload_file(
     request: Request,
     file: UploadFile = File(...),
     usage: str = Form(default="general"),
+    _limiter: None = Depends(rate_limit("file_upload", 20, 60)),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_db),
 ) -> dict:

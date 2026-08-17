@@ -15,9 +15,11 @@ import os
 from typing import Any
 
 import requests
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.api.deps import get_current_user
+from app.models.user import User
 from app.services.ai_lab import config
 
 router = APIRouter(prefix="/api/ai_coach", tags=["ai-coach"])
@@ -98,7 +100,7 @@ def _build_context_message(ctx: CoachContext) -> str | None:
 
 
 @router.post("/chat")
-def chat(req: ChatRequest) -> dict[str, Any]:
+def chat(req: ChatRequest, user: User = Depends(get_current_user)) -> dict[str, Any]:
     """与 AI 心理教练对话（携带可选识别上下文）。"""
     api_key = config.DEEPSEEK_API_KEY
     if not api_key:
