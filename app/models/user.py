@@ -50,6 +50,8 @@ class User(Base):
     role = Column(String(16), nullable=False, server_default="USER", comment="USER/COACH/ADMIN")
     status = Column(String(16), nullable=False, server_default="ENABLED", comment="ENABLED/DISABLED")
     privacy_agreed = Column(Boolean, nullable=False, server_default=text("0"), comment="是否同意隐私政策")
+    agreement_version = Column(String(16), nullable=True, comment="已同意服务协议版本")
+    agreement_accepted_at = Column(DATETIME(fsp=3), nullable=True, comment="同意服务协议时间")
     last_login_at = Column(DATETIME(fsp=3), nullable=True, comment="最后登录(UTC)")
     deleted_at = Column(DATETIME(fsp=3), nullable=True, comment="软删除(UTC)")
     created_at = Column(

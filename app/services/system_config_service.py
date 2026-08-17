@@ -25,6 +25,14 @@ DEFAULT_CONFIGS: dict[str, dict[str, str]] = {
         "value": "本平台提供成长陪伴与自助工具，不提供心理疾病诊断或治疗服务；如有医疗需求，请前往正规医疗机构就诊。",
         "description": "免责声明",
     },
+    "agreement_version": {
+        "value": "1",
+        "description": "服务协议版本号",
+    },
+    "agreement_content": {
+        "value": "",
+        "description": "服务协议与免责声明（Markdown）",
+    },
 }
 
 ALLOWED_KEYS = frozenset(DEFAULT_CONFIGS)
@@ -34,6 +42,12 @@ def _value_of(row: SystemConfig | None, key: str) -> str:
     if row is not None and isinstance(row.config_value, str) and row.config_value.strip():
         return row.config_value
     return DEFAULT_CONFIGS[key]["value"]
+
+
+async def get_config_value(db: AsyncSession, key: str) -> str:
+    """读取单个配置值（缺省回退默认值）。"""
+    row = await db.scalar(select(SystemConfig).where(SystemConfig.config_key == key))
+    return _value_of(row, key)
 
 
 async def get_all_configs(db: AsyncSession) -> list[dict]:
