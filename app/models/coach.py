@@ -226,6 +226,7 @@ class Appointment(Base):
         UniqueConstraint("user_id", "idempotency_key", name="uq_appointments_idem"),
         Index("idx_appointments_user", "user_id", "status", desc("created_at")),
         Index("idx_appointments_coach", "coach_id", "status", desc("created_at")),
+        Index("idx_appointments_order", "order_id"),
         CheckConstraint(
             "status IN ('PENDING','CONFIRMED','COMPLETED','CANCELLED','NO_SHOW','RESCHEDULED')",
             name="chk_appointments_status",
@@ -254,6 +255,7 @@ class Appointment(Base):
         ForeignKey("coach_slots.id", ondelete="RESTRICT", name="fk_appointments_slot"),
         nullable=False,
     )
+    order_id = Column(BIGINT(unsigned=True), nullable=True, comment="关联订单（支付锁定）")
     need_desc = Column(String(500), nullable=False, comment="教练式提问收集的需求")
     status = Column(String(16), nullable=False, server_default="PENDING", comment="PENDING/CONFIRMED/COMPLETED/CANCELLED")
     cancel_reason = Column(String(255), nullable=True)
