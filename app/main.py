@@ -11,6 +11,7 @@ import socketio
 
 from app.api.v1 import (
     admin,
+    admin_orders,
     appointments,
     articles,
     auth,
@@ -23,10 +24,12 @@ from app.api.v1 import (
     growth_assessments,
     home,
     notifications,
+    orders,
     platform,
     self_coaching,
     tags,
     users,
+    wallet,
 )
 from app.api.v1 import ai_coach, ai_lab
 from app.api.v1 import chat as chat_api
@@ -195,6 +198,10 @@ app.include_router(admin.feedback_router, prefix="/api/v1")
 app.include_router(admin.stats_router, prefix="/api/v1")
 app.include_router(admin.config_router, prefix="/api/v1")
 app.include_router(admin.communities_router, prefix="/api/v1")
+app.include_router(orders.router, prefix="/api/v1")
+app.include_router(wallet.router, prefix="/api/v1")
+app.include_router(admin_orders.router, prefix="/api/v1")
+app.include_router(admin_orders.wallet_router, prefix="/api/v1")
 
 # ─── AI 实验室：多模态音频分析 + AI 心理教练 ──────────────────────────
 app.include_router(ai_lab.router)
