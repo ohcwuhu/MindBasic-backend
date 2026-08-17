@@ -22,6 +22,7 @@ from app.services.emotion_journal_service import (
     journal_to_out,
     pick_feedback,
 )
+from app.services.crisis_service import maybe_flag_crisis
 
 router = APIRouter(prefix="/emotion-journals", tags=["emotion-journals"])
 
@@ -41,6 +42,7 @@ async def create_journal(
         feedback=feedback,
     )
     db.add(journal)
+    await maybe_flag_crisis(db, user.id, "EMOTION_JOURNAL", body.content)
     await db.commit()
     await db.refresh(journal)
     return ok(

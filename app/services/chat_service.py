@@ -9,6 +9,7 @@ from app.core.exceptions import AppError
 from app.models.chat import ChatConversation, ChatMessage
 from app.models.coach import CoachProfile
 from app.models.user import User
+from app.services.crisis_service import maybe_flag_crisis
 from app.utils.time import to_iso, utcnow_naive
 
 
@@ -169,6 +170,8 @@ async def send_message(
         conv.coach_reply_count += 1
     conv.last_message_preview = content[:255]
     conv.last_message_at = utcnow_naive()
+    if role == "USER":
+        await maybe_flag_crisis(db, user_id, "CHAT", content)
     await db.commit()
     await db.refresh(msg)
     return msg

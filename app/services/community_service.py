@@ -14,6 +14,7 @@ from app.models.community import (
 )
 from app.models.user import User
 from app.services.content_guard import check_banned_words
+from app.services.crisis_service import maybe_flag_crisis
 from app.utils.time import to_iso
 
 
@@ -317,6 +318,7 @@ async def create_post(db: AsyncSession, user: User, community_id: int, data) -> 
         image_url=data.image_url,
     )
     db.add(post)
+    await maybe_flag_crisis(db, user.id, "COMMUNITY", data.content)
     await db.commit()
     await db.refresh(post)
     return await _post_out(db, post, user.nickname, False, 0)
