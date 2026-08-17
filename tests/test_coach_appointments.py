@@ -7,6 +7,7 @@ from sqlalchemy import select
 from app.db.session import SessionLocal
 from app.models.coach import Appointment, CoachProfile, CoachSlot
 from app.models.user import User
+from app.models.v1_1 import Order, Payment, Refund
 
 
 def unique_phone() -> str:
@@ -88,6 +89,13 @@ def coach_env(client, admin_headers):
 
     db = SessionLocal()
     try:
+        appt_ids = list(db.scalars(select(Appointment.id).where(Appointment.coach_id == coach_id)))
+        if appt_ids:
+            order_ids = list(db.scalars(select(Order.id).where(Order.appointment_id.in_(appt_ids))))
+            if order_ids:
+                db.execute(Payment.__table__.delete().where(Payment.order_id.in_(order_ids)))
+                db.execute(Refund.__table__.delete().where(Refund.order_id.in_(order_ids)))
+                db.execute(Order.__table__.delete().where(Order.id.in_(order_ids)))
         db.execute(Appointment.__table__.delete().where(Appointment.coach_id == coach_id))
         db.commit()
     finally:
@@ -110,12 +118,34 @@ def book(client, auth_headers, coach_env, slot_index: int) -> int:
     return resp.json()["data"]["id"]
 
 
+def pay(client, auth_headers, appointment_id: int) -> str:
+    mine = client.get("/api/v1/appointments/mine", headers=auth_headers).json()["data"]["items"]
+    item = next(a for a in mine if a["id"] == appointment_id)
+    assert item["paymentStatus"] == "CREATED"
+    order_no = item["orderNo"]
+    resp = client.post(f"/api/v1/orders/{order_no}/pay", headers=auth_headers, json={"method": "MOCK"})
+    assert resp.status_code == 200
+    assert resp.json()["data"]["status"] == "PAID"
+    return order_no
+
+
 def test_booking_confirm_complete(client, auth_headers, coach_env):
     appointment_id = book(client, auth_headers, coach_env, 0)
 
     resp = client.get("/api/v1/appointments/mine", headers=auth_headers)
     mine = next(a for a in resp.json()["data"]["items"] if a["id"] == appointment_id)
     assert mine["status"] == "PENDING" and mine["canCancel"] is True
+    assert mine["paymentStatus"] == "CREATED"
+
+    # 付费锁定：未支付前教练不能确认
+    resp = client.post(
+        f"/api/v1/coach/appointments/{appointment_id}/confirm",
+        headers=coach_env["coach_headers"],
+    )
+    assert resp.status_code == 402
+    assert resp.json()["code"] == "PAYMENT_REQUIRED"
+
+    pay(client, auth_headers, appointment_id)
 
     resp = client.get(
         "/api/v1/coach/appointments?status=PENDING&page=1&pageSize=10",

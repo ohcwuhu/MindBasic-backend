@@ -7,6 +7,7 @@ from sqlalchemy import select
 from app.db.session import SessionLocal
 from app.models.coach import Appointment, CoachProfile, CoachSlot, Service
 from app.models.user import User
+from app.models.v1_1 import Order, Payment, Refund
 
 
 def unique_phone(prefix: str) -> str:
@@ -87,6 +88,10 @@ def env(client, admin_headers):
     )
     assert booking.status_code == 201
     appointment_id = booking.json()["data"]["id"]
+    order_no = booking.json()["data"]["orderNo"]
+    assert client.post(
+        f"/api/v1/orders/{order_no}/pay", headers=user_headers, json={"method": "MOCK"}
+    ).status_code == 200
     assert client.post(f"/api/v1/coach/appointments/{appointment_id}/confirm", headers=coach_headers).status_code == 200
     assert client.post(f"/api/v1/coach/appointments/{appointment_id}/complete", headers=coach_headers).status_code == 200
 
@@ -101,6 +106,13 @@ def env(client, admin_headers):
 
     db = SessionLocal()
     try:
+        user = db.scalar(select(User).where(User.phone == user_phone))
+        if user is not None:
+            order_ids = list(db.scalars(select(Order.id).where(Order.user_id == user.id)))
+            if order_ids:
+                db.execute(Payment.__table__.delete().where(Payment.order_id.in_(order_ids)))
+                db.execute(Refund.__table__.delete().where(Refund.order_id.in_(order_ids)))
+                db.execute(Order.__table__.delete().where(Order.id.in_(order_ids)))
         db.execute(Appointment.__table__.delete().where(Appointment.coach_id == coach_id))
         db.commit()
     finally:
