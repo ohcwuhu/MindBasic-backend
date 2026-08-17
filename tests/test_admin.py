@@ -25,7 +25,7 @@ def test_admin_users_manage(client, admin_headers):
     phone = unique_phone()
     resp = client.post(
         "/api/v1/auth/register",
-        json={"phone": phone, "password": "Test123456", "nickname": "待管理用户", "privacyAgreed": True},
+        json={"phone": phone, "password": "Test123456", "nickname": "待管理用户", "privacyAgreed": True, "serviceAgreed": True},
     )
     assert resp.status_code == 201
     user_id = resp.json()["data"]["user"]["id"]
@@ -246,7 +246,7 @@ def test_admin_requires_admin_role(client):
     phone = unique_phone()
     resp = client.post(
         "/api/v1/auth/register",
-        json={"phone": phone, "password": "Test123456", "nickname": "普通用户", "privacyAgreed": True},
+        json={"phone": phone, "password": "Test123456", "nickname": "普通用户", "privacyAgreed": True, "serviceAgreed": True},
     )
     headers = {"Authorization": f"Bearer {resp.json()['data']['accessToken']}"}
     try:

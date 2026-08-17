@@ -40,7 +40,7 @@ def pay_env(client, admin_headers):
 
     reg = client.post(
         "/api/v1/auth/register",
-        json={"phone": coach_phone, "password": "Test123456", "nickname": "支付教练", "privacyAgreed": True},
+        json={"phone": coach_phone, "password": "Test123456", "nickname": "支付教练", "privacyAgreed": True, "serviceAgreed": True},
     )
     assert reg.status_code == 201
     coach_headers = {"Authorization": f"Bearer {reg.json()['data']['accessToken']}"}
@@ -81,7 +81,7 @@ def pay_env(client, admin_headers):
 
     reg = client.post(
         "/api/v1/auth/register",
-        json={"phone": user_phone, "password": "Test123456", "nickname": "支付用户", "privacyAgreed": True},
+        json={"phone": user_phone, "password": "Test123456", "nickname": "支付用户", "privacyAgreed": True, "serviceAgreed": True},
     )
     assert reg.status_code == 201
     user_headers = {"Authorization": f"Bearer {reg.json()['data']['accessToken']}"}

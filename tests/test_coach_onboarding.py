@@ -11,7 +11,7 @@ def second_coach_headers(client):
     phone = "138" + str(int(time.time() * 1000) % 100000000).zfill(8)
     resp = client.post(
         "/api/v1/auth/register",
-        json={"phone": phone, "password": "Test123456", "nickname": "驳回测试", "privacyAgreed": True},
+        json={"phone": phone, "password": "Test123456", "nickname": "驳回测试", "privacyAgreed": True, "serviceAgreed": True},
     )
     assert resp.status_code == 201
     token = resp.json()["data"]["accessToken"]

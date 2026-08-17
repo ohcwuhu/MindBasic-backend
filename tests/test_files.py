@@ -85,7 +85,7 @@ def test_private_file_access_control(client, auth_headers, admin_headers):
     phone = "137" + str(int(time_mod.time() * 1000) % 100000000).zfill(8)
     reg = client.post(
         "/api/v1/auth/register",
-        json={"phone": phone, "password": "Test123456", "nickname": "路人", "privacyAgreed": True},
+        json={"phone": phone, "password": "Test123456", "nickname": "路人", "privacyAgreed": True, "serviceAgreed": True},
     )
     other_headers = {"Authorization": f"Bearer {reg.json()['data']['accessToken']}"}
     try:

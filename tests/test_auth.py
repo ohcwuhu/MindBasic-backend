@@ -82,11 +82,12 @@ def test_register_flow_and_duplicate():
             "phone": phone,
             "password": "Test123456",
             "nickname": "测试用户",
-            "privacyAgreed": True,
+            "privacyAgreed": True, "serviceAgreed": True,
         },
     )
     assert resp.status_code == 201
     assert resp.json()["data"]["user"]["role"] == "USER"
+    assert resp.json()["data"]["user"]["agreementVersion"] == "1"
 
     resp = client.post(
         "/api/v1/auth/register",
@@ -94,7 +95,7 @@ def test_register_flow_and_duplicate():
             "phone": phone,
             "password": "Test123456",
             "nickname": "测试用户",
-            "privacyAgreed": True,
+            "privacyAgreed": True, "serviceAgreed": True,
         },
     )
     assert resp.status_code == 409
@@ -116,7 +117,7 @@ def test_error_cases():
 
     resp = client.post(
         "/api/v1/auth/register",
-        json={"phone": "123", "password": "x", "nickname": "", "privacyAgreed": True},
+        json={"phone": "123", "password": "x", "nickname": "", "privacyAgreed": True, "serviceAgreed": True},
     )
     assert resp.status_code == 400
     assert resp.json()["code"] == "VALIDATION_ERROR"
@@ -146,7 +147,7 @@ def test_disabled_account_login_and_access():
     phone = unique_phone()
     client.post(
         "/api/v1/auth/register",
-        json={"phone": phone, "password": "Test123456", "nickname": "禁用测试", "privacyAgreed": True},
+        json={"phone": phone, "password": "Test123456", "nickname": "禁用测试", "privacyAgreed": True, "serviceAgreed": True},
     )
     disable_user_by_phone(phone)
 
@@ -200,12 +201,25 @@ def test_register_requires_privacy_agreement():
     assert resp.status_code == 400
     assert resp.json()["code"] == "VALIDATION_ERROR"
 
+    resp = client.post(
+        "/api/v1/auth/register",
+        json={
+            "phone": unique_phone(),
+            "password": "Test123456",
+            "nickname": "未同意协议",
+            "privacyAgreed": True,
+            "serviceAgreed": False,
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["code"] == "VALIDATION_ERROR"
+
 
 def test_change_password_and_deactivate():
     phone = unique_phone()
     reg = client.post(
         "/api/v1/auth/register",
-        json={"phone": phone, "password": "OldPass123", "nickname": "资料测试", "privacyAgreed": True},
+        json={"phone": phone, "password": "OldPass123", "nickname": "资料测试", "privacyAgreed": True, "serviceAgreed": True},
     )
     assert reg.status_code == 201
     user_id = reg.json()["data"]["user"]["id"]
@@ -241,7 +255,7 @@ def test_change_password_and_deactivate():
     assert client.post("/api/v1/auth/login", json={"phone": phone, "password": "NewPass123"}).status_code == 401
     resp = client.post(
         "/api/v1/auth/register",
-        json={"phone": phone, "password": "NewPass123", "nickname": "再来", "privacyAgreed": True},
+        json={"phone": phone, "password": "NewPass123", "nickname": "再来", "privacyAgreed": True, "serviceAgreed": True},
     )
     assert resp.status_code == 201
 
@@ -275,7 +289,7 @@ def test_access_token_blacklisted_after_password_change():
     phone = unique_phone()
     reg = client.post(
         "/api/v1/auth/register",
-        json={"phone": phone, "password": "OldPass123", "nickname": "黑名单测试", "privacyAgreed": True},
+        json={"phone": phone, "password": "OldPass123", "nickname": "黑名单测试", "privacyAgreed": True, "serviceAgreed": True},
     )
     assert reg.status_code == 201
     token = reg.json()["data"]["accessToken"]

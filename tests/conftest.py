@@ -38,7 +38,7 @@ def auth_headers(client):
     phone = unique_phone()
     resp = client.post(
         "/api/v1/auth/register",
-        json={"phone": phone, "password": "Test123456", "nickname": "接口测试", "privacyAgreed": True},
+        json={"phone": phone, "password": "Test123456", "nickname": "接口测试", "privacyAgreed": True, "serviceAgreed": True},
     )
     assert resp.status_code == 201
     token = resp.json()["data"]["accessToken"]

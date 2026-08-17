@@ -33,7 +33,7 @@ def env(client, admin_headers):
     # 教练：注册 → 提交资料 → 管理员通过
     reg = client.post(
         "/api/v1/auth/register",
-        json={"phone": coach_phone, "password": "Test123456", "nickname": "V11教练", "privacyAgreed": True},
+        json={"phone": coach_phone, "password": "Test123456", "nickname": "V11教练", "privacyAgreed": True, "serviceAgreed": True},
     )
     assert reg.status_code == 201
     coach_headers = {"Authorization": f"Bearer {reg.json()['data']['accessToken']}"}
@@ -78,7 +78,7 @@ def env(client, admin_headers):
     # 用户注册并预约 → 教练确认 → 完成
     reg = client.post(
         "/api/v1/auth/register",
-        json={"phone": user_phone, "password": "Test123456", "nickname": "评价用户", "privacyAgreed": True},
+        json={"phone": user_phone, "password": "Test123456", "nickname": "评价用户", "privacyAgreed": True, "serviceAgreed": True},
     )
     user_headers = {"Authorization": f"Bearer {reg.json()['data']['accessToken']}"}
     booking = client.post(
@@ -232,7 +232,7 @@ def test_leaderboard_group_by_user(client):
         for phone in phones:
             reg = client.post(
                 "/api/v1/auth/register",
-                json={"phone": phone, "password": "Test123456", "nickname": nickname, "privacyAgreed": True},
+                json={"phone": phone, "password": "Test123456", "nickname": nickname, "privacyAgreed": True, "serviceAgreed": True},
             )
             assert reg.status_code == 201
             headers = {"Authorization": f"Bearer {reg.json()['data']['accessToken']}"}

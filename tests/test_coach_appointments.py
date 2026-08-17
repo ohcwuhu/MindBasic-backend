@@ -31,7 +31,7 @@ def coach_env(client, admin_headers):
     phone = unique_phone()
     resp = client.post(
         "/api/v1/auth/register",
-        json={"phone": phone, "password": "Test123456", "nickname": "教练测试", "privacyAgreed": True},
+        json={"phone": phone, "password": "Test123456", "nickname": "教练测试", "privacyAgreed": True, "serviceAgreed": True},
     )
     assert resp.status_code == 201
     coach_headers = {"Authorization": f"Bearer {resp.json()['data']['accessToken']}"}
@@ -322,7 +322,7 @@ def test_unauthorized_coach_access(client):
     phone = unique_phone()
     resp = client.post(
         "/api/v1/auth/register",
-        json={"phone": phone, "password": "Test123456", "nickname": "路人", "privacyAgreed": True},
+        json={"phone": phone, "password": "Test123456", "nickname": "路人", "privacyAgreed": True, "serviceAgreed": True},
     )
     headers = {"Authorization": f"Bearer {resp.json()['data']['accessToken']}"}
     try:
@@ -411,7 +411,7 @@ def test_clients_followup_reminder(client, coach_env, auth_headers):
     temp_phone = unique_phone()
     reg = client.post(
         "/api/v1/auth/register",
-        json={"phone": temp_phone, "password": "Test123456", "nickname": "跟进测试", "privacyAgreed": True},
+        json={"phone": temp_phone, "password": "Test123456", "nickname": "跟进测试", "privacyAgreed": True, "serviceAgreed": True},
     )
     assert reg.status_code == 201
     user_id = reg.json()["data"]["user"]["id"]

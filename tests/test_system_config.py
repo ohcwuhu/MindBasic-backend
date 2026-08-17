@@ -15,7 +15,14 @@ def test_admin_get_configs(client, admin_headers):
     resp = client.get("/api/v1/admin/system-configs", headers=admin_headers)
     assert resp.status_code == 200
     keys = {item["key"] for item in resp.json()["data"]["items"]}
-    assert keys == {"platform_name", "hotline", "emergency_hint", "disclaimer"}
+    assert keys == {
+        "platform_name",
+        "hotline",
+        "emergency_hint",
+        "disclaimer",
+        "agreement_version",
+        "agreement_content",
+    }
 
 
 def test_admin_update_config_reflected_publicly(client, admin_headers):

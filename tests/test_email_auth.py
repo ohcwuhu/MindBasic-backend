@@ -117,7 +117,7 @@ def test_bind_email_conflict(client, auth_headers, captured_codes, monkeypatch):
     phone = "134" + str(int(time_mod.time() * 1000) % 100000000).zfill(8)
     resp = client.post(
         "/api/v1/auth/register",
-        json={"phone": phone, "password": "Test123456", "nickname": "邮箱冲突", "privacyAgreed": True},
+        json={"phone": phone, "password": "Test123456", "nickname": "邮箱冲突", "privacyAgreed": True, "serviceAgreed": True},
     )
     other_headers = {"Authorization": f"Bearer {resp.json()['data']['accessToken']}"}
     try:

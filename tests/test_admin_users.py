@@ -16,7 +16,7 @@ def test_admin_users_filter_by_created_at(client, admin_headers):
     phone = unique_phone()
     resp = client.post(
         "/api/v1/auth/register",
-        json={"phone": phone, "password": "Test123456", "nickname": "时间筛选", "privacyAgreed": True},
+        json={"phone": phone, "password": "Test123456", "nickname": "时间筛选", "privacyAgreed": True, "serviceAgreed": True},
     )
     assert resp.status_code == 201
     try:
