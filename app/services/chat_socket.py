@@ -90,7 +90,13 @@ def register_chat_socket_events(sio, log) -> None:
             try:
                 msg = await send_message(db, uid, conv_id, content)
                 peer_uid = await get_peer_user_id(db, conv_id, uid)
-            except AppError:
+            except AppError as e:
+                if e.code == "CHAT_LIMIT_REACHED":
+                    await sio.emit(
+                        "chat:limit_reached",
+                        {"conversationId": conv_id, "message": e.message},
+                        room=sid,
+                    )
                 return
         await sio.emit("chat:message", message_to_out(msg), room=f"conv:{conv_id}", namespace="/chat")
         if peer_uid:

@@ -17,6 +17,7 @@ from app.models.v1_1 import Review
 from app.services.notification_service import notify
 from app.utils.format import mask_phone
 from app.schemas.appointment import AppointmentCreateIn
+from app.services.chat_service import unlock_conversation
 from app.utils.time import to_iso, utcnow_naive
 
 
@@ -183,6 +184,7 @@ async def create_appointment(
                 return existing, False
         raise AppError(409, "SLOT_UNAVAILABLE", "所选时段已被预约")
     await db.refresh(appointment)
+    await unlock_conversation(db, user.id, coach.id)
     return appointment, True
 
 

@@ -1,5 +1,7 @@
 """线上聊天业务逻辑（用户—教练）。"""
 
+import os
+
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,6 +10,10 @@ from app.models.chat import ChatConversation, ChatMessage
 from app.models.coach import CoachProfile
 from app.models.user import User
 from app.utils.time import to_iso, utcnow_naive
+
+
+# 免费沟通额度（可经环境变量覆盖）
+FREE_REPLY_LIMIT = int(os.environ.get("CHAT_FREE_REPLY_LIMIT", "3"))
 
 
 async def _get_approved_coach(db: AsyncSession, coach_id: int) -> CoachProfile:
@@ -41,7 +47,7 @@ async def get_or_create_conversation(db: AsyncSession, user: User, coach_id: int
         )
     )
     if conv is None:
-        conv = ChatConversation(user_id=user.id, coach_id=coach_id)
+        conv = ChatConversation(user_id=user.id, coach_id=coach_id, free_limit=FREE_REPLY_LIMIT)
         db.add(conv)
         await db.commit()
         await db.refresh(conv)
@@ -114,6 +120,10 @@ async def list_conversations(db: AsyncSession, user: User) -> list[dict]:
                 "lastMessagePreview": conv.last_message_preview or "",
                 "lastMessageAt": to_iso(conv.last_message_at),
                 "unreadCount": unread_map.get(conv.id, 0),
+                "freeLimit": conv.free_limit,
+                "coachReplyCount": conv.coach_reply_count,
+                "unlocked": bool(conv.unlocked),
+                "limitReached": (not conv.unlocked) and conv.coach_reply_count >= conv.free_limit,
             }
         )
     return result
@@ -144,6 +154,10 @@ async def send_message(
 ) -> ChatMessage:
     conv = await _is_member(db, user_id, conversation_id)
     role = "COACH" if conv.user_id != user_id else "USER"
+    if not conv.unlocked and conv.coach_reply_count >= conv.free_limit:
+        if role == "COACH":
+            raise AppError(403, "CHAT_LIMIT_REACHED", "免费沟通额度已用完，请引导用户预约正式服务后再继续")
+        raise AppError(403, "CHAT_LIMIT_REACHED", "免费沟通额度已用完，请预约正式服务后继续沟通")
     msg = ChatMessage(
         conversation_id=conversation_id,
         sender_id=user_id,
@@ -151,11 +165,26 @@ async def send_message(
         content=content,
     )
     db.add(msg)
+    if role == "COACH":
+        conv.coach_reply_count += 1
     conv.last_message_preview = content[:255]
     conv.last_message_at = utcnow_naive()
     await db.commit()
     await db.refresh(msg)
     return msg
+
+
+async def unlock_conversation(db: AsyncSession, user_id: int, coach_id: int) -> None:
+    """用户预约后解锁该用户-教练会话（后续沟通不再受限）。"""
+    conv = await db.scalar(
+        select(ChatConversation).where(
+            ChatConversation.user_id == user_id,
+            ChatConversation.coach_id == coach_id,
+        )
+    )
+    if conv is not None and not conv.unlocked:
+        conv.unlocked = True
+        await db.commit()
 
 
 async def mark_read(db: AsyncSession, user_id: int, conversation_id: int) -> int:

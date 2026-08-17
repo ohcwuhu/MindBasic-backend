@@ -1,10 +1,12 @@
 """线上聊天（用户—教练）数据模型。"""
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Column,
     ForeignKey,
     Index,
+    INTEGER,
     String,
     Text,
     UniqueConstraint,
@@ -40,6 +42,9 @@ class ChatConversation(Base):
     )
     last_message_preview = Column(String(255), nullable=True, comment="最后一条消息预览")
     last_message_at = Column(DATETIME(fsp=3), nullable=True, comment="最后消息时间(UTC)")
+    free_limit = Column(INTEGER, nullable=False, server_default=text("3"), comment="免费沟通：教练回复条数上限")
+    coach_reply_count = Column(INTEGER, nullable=False, server_default=text("0"), comment="教练已回复条数")
+    unlocked = Column(Boolean, nullable=False, server_default=text("0"), comment="预约后解锁（不再受限）")
     created_at = Column(
         DATETIME(fsp=3),
         nullable=False,
