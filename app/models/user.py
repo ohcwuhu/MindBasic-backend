@@ -29,6 +29,10 @@ class User(Base):
             "status IN ('ENABLED','DISABLED')",
             name="chk_users_status",
         ),
+        CheckConstraint(
+            "gender IN ('boy','girl')",
+            name="chk_users_gender",
+        ),
     )
 
     id = Column(BIGINT(unsigned=True), primary_key=True, autoincrement=True)
@@ -36,6 +40,12 @@ class User(Base):
     email = Column(String(255), nullable=True, comment="邮箱，唯一（可空）")
     password_hash = Column(String(255), nullable=False, comment="bcrypt 哈希")
     nickname = Column(String(32), nullable=False, comment="昵称")
+    gender = Column(
+        String(8),
+        nullable=False,
+        server_default="girl",
+        comment="陪伴角色性别：boy=小男孩 / girl=小女孩",
+    )
     avatar_url = Column(String(512), nullable=True, comment="头像")
     role = Column(String(16), nullable=False, server_default="USER", comment="USER/COACH/ADMIN")
     status = Column(String(16), nullable=False, server_default="ENABLED", comment="ENABLED/DISABLED")

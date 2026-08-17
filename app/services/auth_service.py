@@ -110,6 +110,7 @@ def to_user_out(user: User) -> UserOut:
         email=user.email,
         nickname=user.nickname,
         avatarUrl=user.avatar_url,
+        gender=user.gender,  # type: ignore[arg-type]
         role=user.role,  # type: ignore[arg-type]
         isDisabled=user.status != "ENABLED",
         createdAt=created_at,
@@ -121,7 +122,7 @@ async def get_user_by_phone(db: AsyncSession, phone: str) -> User | None:
     return await db.scalar(stmt)
 
 
-async def register_user(db: AsyncSession, phone: str, password: str, nickname: str, privacy_agreed: bool) -> User:
+async def register_user(db: AsyncSession, phone: str, password: str, nickname: str, privacy_agreed: bool, gender: str = "girl") -> User:
     if not privacy_agreed:
         raise AppError(400, "VALIDATION_ERROR", "请先阅读并同意隐私政策")
     if await get_user_by_phone(db, phone) is not None:
@@ -130,6 +131,7 @@ async def register_user(db: AsyncSession, phone: str, password: str, nickname: s
         phone=phone,
         password_hash=hash_password(password),
         nickname=nickname,
+        gender=gender,
         role="USER",
         status="ENABLED",
         privacy_agreed=True,

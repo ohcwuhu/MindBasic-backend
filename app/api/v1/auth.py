@@ -64,7 +64,7 @@ async def register(
     db: AsyncSession = Depends(get_async_db),
     _limiter: None = Depends(rate_limit("register", 5, 60)),
 ) -> dict:
-    user = await register_user(db, body.phone, body.password, body.nickname, body.privacy_agreed)
+    user = await register_user(db, body.phone, body.password, body.nickname, body.privacy_agreed, body.gender)
     access_token, expires_in = create_access_token(user.id, user.role)
     refresh_token = await issue_refresh_token(db, user)
     set_refresh_cookie(response, refresh_token)

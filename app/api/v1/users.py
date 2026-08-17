@@ -39,6 +39,8 @@ async def patch_me(
         user.nickname = data["nickname"]
     if "avatarUrl" in data:
         user.avatar_url = data["avatarUrl"]
+    if "gender" in data:
+        user.gender = data["gender"]
     await db.commit()
     await db.refresh(user)
     return ok(to_user_out(user).model_dump(by_alias=True), trace_id=request.state.trace_id)
