@@ -227,7 +227,7 @@ class Appointment(Base):
         Index("idx_appointments_user", "user_id", "status", desc("created_at")),
         Index("idx_appointments_coach", "coach_id", "status", desc("created_at")),
         CheckConstraint(
-            "status IN ('PENDING','CONFIRMED','COMPLETED','CANCELLED')",
+            "status IN ('PENDING','CONFIRMED','COMPLETED','CANCELLED','NO_SHOW','RESCHEDULED')",
             name="chk_appointments_status",
         ),
     )
@@ -258,6 +258,8 @@ class Appointment(Base):
     status = Column(String(16), nullable=False, server_default="PENDING", comment="PENDING/CONFIRMED/COMPLETED/CANCELLED")
     cancel_reason = Column(String(255), nullable=True)
     cancel_by = Column(BIGINT(unsigned=True), nullable=True, comment="取消人(用户或教练ID)")
+    cancel_deadline_at = Column(DATETIME(fsp=3), nullable=True, comment="免费取消截止时间(本地)")
+    no_show_at = Column(DATETIME(fsp=3), nullable=True, comment="判定未赴约时间")
     idempotency_key = Column(String(36), nullable=True, comment="幂等键")
     completed_at = Column(DATETIME(fsp=3), nullable=True)
     created_at = Column(DATETIME(fsp=3), nullable=False, server_default=text("CURRENT_TIMESTAMP(3)"))
@@ -266,6 +268,31 @@ class Appointment(Base):
         nullable=False,
         server_default=text("CURRENT_TIMESTAMP(3)"),
         onupdate=text("CURRENT_TIMESTAMP(3)"),
+    )
+
+
+class AppointmentEvent(Base):
+    """预约履约事件（取消/改期/爽约等，审计与判定依据）。"""
+
+    __tablename__ = "appointment_events"
+    __table_args__ = (
+        Index("idx_appointment_events", "appointment_id", "created_at"),
+    )
+
+    id = Column(BIGINT(unsigned=True), primary_key=True, autoincrement=True)
+    appointment_id = Column(
+        BIGINT(unsigned=True),
+        ForeignKey("appointments.id", ondelete="CASCADE", name="fk_appointment_events_appt"),
+        nullable=False,
+    )
+    actor_id = Column(BIGINT(unsigned=True), nullable=True, comment="操作者(系统事件为空)")
+    actor_role = Column(String(16), nullable=False, comment="USER/COACH/ADMIN/SYSTEM")
+    event = Column(String(32), nullable=False, comment="BOOKED/CONFIRMED/CANCEL_USER/CANCEL_COACH/RESCHEDULE/NO_SHOW_USER/NO_SHOW_COACH/COMPLETED")
+    note = Column(String(255), nullable=True)
+    created_at = Column(
+        DATETIME(fsp=3),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3)"),
     )
 
 

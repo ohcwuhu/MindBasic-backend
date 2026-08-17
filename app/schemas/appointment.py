@@ -45,8 +45,11 @@ class AppointmentOut(ApiModel):
     service: ServiceBriefOut
     slot: SlotBriefOut
     need_desc: str
-    status: Literal["PENDING", "CONFIRMED", "COMPLETED", "CANCELLED"]
+    status: Literal["PENDING", "CONFIRMED", "COMPLETED", "CANCELLED", "NO_SHOW", "RESCHEDULED"]
     cancel_reason: str | None = None
+    cancel_deadline_at: str | None = None
+    no_show_at: str | None = None
+    cancel_window: Literal["free", "near", "closed"]
     can_cancel: bool
     reviewed: bool
     created_at: str
@@ -59,18 +62,26 @@ class CoachAppointmentOut(ApiModel):
     service: ServiceBriefOut
     slot: SlotBriefOut
     need_desc: str
-    status: Literal["PENDING", "CONFIRMED", "COMPLETED", "CANCELLED"]
+    status: Literal["PENDING", "CONFIRMED", "COMPLETED", "CANCELLED", "NO_SHOW", "RESCHEDULED"]
     cancel_reason: str | None = None
+    cancel_deadline_at: str | None = None
+    no_show_at: str | None = None
+    cancel_window: Literal["free", "near", "closed"]
     created_at: str
     completed_at: str | None = None
 
 
 class AppointmentStatusOut(ApiModel):
     id: int
-    status: Literal["PENDING", "CONFIRMED", "COMPLETED", "CANCELLED"]
+    status: Literal["PENDING", "CONFIRMED", "COMPLETED", "CANCELLED", "NO_SHOW", "RESCHEDULED"]
     cancel_reason: str | None = None
     completed_at: str | None = None
 
 
 class CancelAppointmentIn(ApiModel):
-    cancel_reason: str = Field(min_length=1, max_length=255)
+    cancel_reason: str | None = Field(default=None, max_length=255)
+
+
+class RescheduleAppointmentIn(ApiModel):
+    slot_id: int
+    service_id: int | None = None

@@ -1,15 +1,16 @@
 """预约业务逻辑（用户端下单 + 教练端处理）。"""
 
 import uuid
+import os
 from datetime import date as date_type
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppError
-from app.models.coach import Appointment, CoachProfile, CoachSlot, Service
+from app.models.coach import Appointment, AppointmentEvent, CoachProfile, CoachSlot, Service
 from app.models.user import User
 from app.models.v1_1 import ClientRelation
 from app.models.v1_1 import Review
@@ -21,6 +22,87 @@ from app.utils.time import to_iso, utcnow_naive
 
 def generate_appointment_no() -> str:
     return "AP" + datetime.now().strftime("%Y%m%d%H%M%S") + uuid.uuid4().hex[:6].upper()
+
+
+# ============================================================
+#  履约规则（可经环境变量覆盖）
+# ============================================================
+FREE_CANCEL_HOURS = int(os.environ.get("APPT_FREE_CANCEL_HOURS", "24"))
+NEAR_CANCEL_HOURS = int(os.environ.get("APPT_NEAR_CANCEL_HOURS", "2"))
+NO_SHOW_GRACE_MIN = int(os.environ.get("APPT_NO_SHOW_GRACE_MIN", "15"))
+
+
+def _slot_start(slot: CoachSlot) -> datetime:
+    """预约开始时间（槽位为本地业务时间，与现有过期判断保持一致）。"""
+    return datetime.combine(slot.date, slot.start_time)
+
+
+def _cancel_deadline(slot: CoachSlot) -> datetime:
+    return _slot_start(slot) - timedelta(hours=FREE_CANCEL_HOURS)
+
+
+def _near_cancel_deadline(slot: CoachSlot) -> datetime:
+    return _slot_start(slot) - timedelta(hours=NEAR_CANCEL_HOURS)
+
+
+def _no_show_threshold(slot: CoachSlot) -> datetime:
+    return _slot_start(slot) + timedelta(minutes=NO_SHOW_GRACE_MIN)
+
+
+def _cancel_window(slot: CoachSlot | None, now: datetime | None = None) -> str:
+    """返回取消窗口：free（免费）/ near（临近）/ closed（已关闭）。"""
+    if slot is None:
+        return "closed"
+    now = now or datetime.now()
+    if now <= _cancel_deadline(slot):
+        return "free"
+    if now <= _near_cancel_deadline(slot):
+        return "near"
+    return "closed"
+
+
+def _is_overdue_no_show(slot: CoachSlot | None) -> bool:
+    return slot is not None and datetime.now() > _no_show_threshold(slot)
+
+
+def _effective_status(appointment: Appointment, slot: CoachSlot | None) -> str:
+    """读取时计算有效状态：逾期未赴约且仍待开始 → 视为 NO_SHOW（不落库）。"""
+    if appointment.status in ("PENDING", "CONFIRMED"):
+        if slot is not None and _is_overdue_no_show(slot):
+            return "NO_SHOW"
+    return appointment.status
+
+
+async def _record_event(
+    db: AsyncSession,
+    appointment_id: int,
+    actor_id: int | None,
+    actor_role: str,
+    event: str,
+    note: str | None = None,
+) -> None:
+    db.add(AppointmentEvent(
+        appointment_id=appointment_id,
+        actor_id=actor_id,
+        actor_role=actor_role,
+        event=event,
+        note=note,
+    ))
+
+
+async def _mark_no_show(
+    db: AsyncSession,
+    appointment: Appointment,
+    actor_id: int | None,
+    actor_role: str,
+    note: str = "逾期未进入服务房间",
+) -> None:
+    appointment.status = "NO_SHOW"
+    appointment.no_show_at = utcnow_naive()
+    await _record_event(db, appointment.id, actor_id, actor_role, "NO_SHOW_USER", note)
+    await release_slot(db, appointment.slot_id)
+    await db.commit()
+    await db.refresh(appointment)
 
 
 async def create_appointment(
@@ -73,9 +155,12 @@ async def create_appointment(
         slot_id=slot.id,
         need_desc=data.need_desc.strip(),
         status="PENDING",
+        cancel_deadline_at=_cancel_deadline(slot),
         idempotency_key=idempotency_key,
     )
     db.add(appointment)
+    await db.flush()
+    await _record_event(db, appointment.id, user.id, "USER", "BOOKED", "创建预约")
     await notify(
         db,
         coach.user_id,
@@ -106,6 +191,8 @@ async def get_appointment_ctx(db: AsyncSession, appointment: Appointment) -> dic
     service = await db.get(Service, appointment.service_id)
     slot = await db.get(CoachSlot, appointment.slot_id)
     reviewed = await db.scalar(select(Review.id).where(Review.appointment_id == appointment.id)) is not None
+    effective = _effective_status(appointment, slot)
+    window = _cancel_window(slot)
     return {
         "id": appointment.id,
         "appointment_no": appointment.appointment_no,
@@ -127,9 +214,12 @@ async def get_appointment_ctx(db: AsyncSession, appointment: Appointment) -> dic
             "end_time": slot.end_time.strftime("%H:%M"),
         },
         "need_desc": appointment.need_desc,
-        "status": appointment.status,
+        "status": effective,
         "cancel_reason": appointment.cancel_reason,
-        "can_cancel": appointment.status in ("PENDING", "CONFIRMED"),
+        "cancel_deadline_at": to_iso(appointment.cancel_deadline_at),
+        "no_show_at": to_iso(appointment.no_show_at),
+        "cancel_window": window,
+        "can_cancel": effective in ("PENDING", "CONFIRMED") and window != "closed",
         "reviewed": reviewed,
         "created_at": to_iso(appointment.created_at),
     }
@@ -157,6 +247,8 @@ async def my_appointments_to_out(db: AsyncSession, appointments: list[Appointmen
         coach_user = users.get(coach.user_id) if coach else None
         service = services.get(a.service_id)
         slot = slots.get(a.slot_id)
+        effective = _effective_status(a, slot)
+        window = _cancel_window(slot)
         items.append({
             "id": a.id,
             "appointment_no": a.appointment_no,
@@ -178,9 +270,12 @@ async def my_appointments_to_out(db: AsyncSession, appointments: list[Appointmen
                 "end_time": slot.end_time.strftime("%H:%M"),
             } if slot else None,
             "need_desc": a.need_desc,
-            "status": a.status,
+            "status": effective,
             "cancel_reason": a.cancel_reason,
-            "can_cancel": a.status in ("PENDING", "CONFIRMED"),
+            "cancel_deadline_at": to_iso(a.cancel_deadline_at),
+            "no_show_at": to_iso(a.no_show_at),
+            "cancel_window": window,
+            "can_cancel": effective in ("PENDING", "CONFIRMED") and window != "closed",
             "reviewed": a.id in reviewed_ids,
             "created_at": to_iso(a.created_at),
         })
@@ -204,7 +299,9 @@ async def list_my_appointments(
     return rows, total
 
 
-async def cancel_my_appointment(db: AsyncSession, user: User, appointment_id: int) -> Appointment:
+async def cancel_my_appointment(
+    db: AsyncSession, user: User, appointment_id: int, reason: str | None = None
+) -> Appointment:
     appointment = await db.scalar(
         select(Appointment).where(Appointment.id == appointment_id, Appointment.user_id == user.id)
     )
@@ -212,11 +309,43 @@ async def cancel_my_appointment(db: AsyncSession, user: User, appointment_id: in
         raise AppError(404, "APPOINTMENT_NOT_FOUND", "预约记录不存在")
     if appointment.status not in ("PENDING", "CONFIRMED"):
         raise AppError(409, "INVALID_STATE_TRANSITION", "当前状态不允许取消")
+    slot = await db.get(CoachSlot, appointment.slot_id)
+
+    # 逾期未赴约：先落 NO_SHOW，再拒绝“取消”
+    if _is_overdue_no_show(slot):
+        await _mark_no_show(db, appointment, user.id, "SYSTEM", "用户逾期未进入服务房间")
+        raise AppError(409, "APPOINTMENT_NO_SHOW", "已逾期未赴约，系统已记录未赴约，无法取消")
+
+    window = _cancel_window(slot)
+    if window == "closed":
+        raise AppError(
+            409,
+            "APPOINTMENT_CANCEL_CLOSED",
+            f"已进入临近时段（距开始不足 {NEAR_CANCEL_HOURS} 小时），请联系教练或客服处理",
+        )
+
     appointment.status = "CANCELLED"
     appointment.cancel_by = user.id
-    slot = await db.get(CoachSlot, appointment.slot_id)
+    appointment.cancel_reason = reason or ("临近时段取消" if window == "near" else "用户取消")
+    await _record_event(
+        db,
+        appointment.id,
+        user.id,
+        "USER",
+        "CANCEL_USER",
+        f"取消窗口={window}",
+    )
     if slot is not None and slot.status == "BOOKED":
         slot.status = "AVAILABLE"
+    coach_profile = await db.get(CoachProfile, appointment.coach_id)
+    coach_user = await db.get(User, coach_profile.user_id) if coach_profile else None
+    await notify(
+        db,
+        coach_user.id if coach_user else 0,
+        "APPOINTMENT",
+        "预约已取消",
+        f"用户取消了预约：{appointment.cancel_reason}",
+    )
     await db.commit()
     await db.refresh(appointment)
     return appointment
@@ -278,6 +407,7 @@ async def coach_appointment_to_out(db: AsyncSession, appointment: Appointment) -
     user = await db.get(User, appointment.user_id)
     service = await db.get(Service, appointment.service_id)
     slot = await db.get(CoachSlot, appointment.slot_id)
+    effective = _effective_status(appointment, slot)
     return {
         "id": appointment.id,
         "appointment_no": appointment.appointment_no,
@@ -299,8 +429,11 @@ async def coach_appointment_to_out(db: AsyncSession, appointment: Appointment) -
             "end_time": slot.end_time.strftime("%H:%M"),
         },
         "need_desc": appointment.need_desc,
-        "status": appointment.status,
+        "status": effective,
         "cancel_reason": appointment.cancel_reason,
+        "cancel_deadline_at": to_iso(appointment.cancel_deadline_at),
+        "no_show_at": to_iso(appointment.no_show_at),
+        "cancel_window": _cancel_window(slot),
         "created_at": to_iso(appointment.created_at),
         "completed_at": to_iso(appointment.completed_at),
     }
@@ -323,6 +456,7 @@ async def coach_appointments_to_out(db: AsyncSession, appointments: list[Appoint
         user = users.get(a.user_id)
         service = services.get(a.service_id)
         slot = slots.get(a.slot_id)
+        effective = _effective_status(a, slot)
         items.append({
             "id": a.id,
             "appointment_no": a.appointment_no,
@@ -344,8 +478,11 @@ async def coach_appointments_to_out(db: AsyncSession, appointments: list[Appoint
                 "end_time": slot.end_time.strftime("%H:%M"),
             } if slot else None,
             "need_desc": a.need_desc,
-            "status": a.status,
+            "status": effective,
             "cancel_reason": a.cancel_reason,
+            "cancel_deadline_at": to_iso(a.cancel_deadline_at),
+            "no_show_at": to_iso(a.no_show_at),
+            "cancel_window": _cancel_window(slot),
             "created_at": to_iso(a.created_at),
             "completed_at": to_iso(a.completed_at),
         })
@@ -380,6 +517,14 @@ async def cancel_coach_appointment(
     appointment.status = "CANCELLED"
     appointment.cancel_reason = reason
     appointment.cancel_by = coach_user_id
+    await _record_event(
+        db,
+        appointment.id,
+        coach_user_id,
+        "COACH",
+        "CANCEL_COACH",
+        f"教练取消：{reason}",
+    )
     await notify(
         db,
         appointment.user_id,
@@ -388,6 +533,112 @@ async def cancel_coach_appointment(
         f"你的预约已取消：{reason}",
     )
     await release_slot(db, appointment.slot_id)
+    await db.commit()
+    await db.refresh(appointment)
+    return appointment
+
+
+async def reschedule_appointment(
+    db: AsyncSession,
+    user: User,
+    appointment_id: int,
+    new_slot_id: int,
+    service_id: int | None,
+) -> tuple[Appointment, Appointment]:
+    """用户改期：原单标记 RESCHEDULED + 释放旧时段，并创建新预约单。"""
+    appointment = await db.scalar(
+        select(Appointment).where(Appointment.id == appointment_id, Appointment.user_id == user.id)
+    )
+    if appointment is None:
+        raise AppError(404, "APPOINTMENT_NOT_FOUND", "预约记录不存在")
+    if appointment.status not in ("PENDING", "CONFIRMED"):
+        raise AppError(409, "INVALID_STATE_TRANSITION", "当前状态不允许改期")
+    old_slot = await db.get(CoachSlot, appointment.slot_id)
+    if _is_overdue_no_show(old_slot):
+        await _mark_no_show(db, appointment, user.id, "SYSTEM", "用户逾期未进入服务房间")
+        raise AppError(409, "APPOINTMENT_NO_SHOW", "已逾期未赴约，无法改期")
+    if _cancel_window(old_slot) == "closed":
+        raise AppError(409, "APPOINTMENT_CANCEL_CLOSED", "已进入临近时段，请联系教练或客服处理")
+
+    coach = await db.get(CoachProfile, appointment.coach_id)
+    service = await db.get(Service, service_id or appointment.service_id)
+    if service is None or service.coach_id != coach.id or not service.is_enabled:
+        raise AppError(400, "SERVICE_INVALID", "服务项目不存在或已下架")
+    new_slot = await db.get(CoachSlot, new_slot_id)
+    if new_slot is None or new_slot.coach_id != coach.id:
+        raise AppError(409, "SLOT_UNAVAILABLE", "所选时段不可用")
+    if new_slot.date < date_type.today():
+        raise AppError(409, "SLOT_UNAVAILABLE", "所选时段已过期")
+    result = await db.execute(
+        update(CoachSlot)
+        .where(CoachSlot.id == new_slot.id, CoachSlot.status == "AVAILABLE")
+        .values(status="BOOKED")
+    )
+    if result.rowcount == 0:
+        raise AppError(409, "SLOT_UNAVAILABLE", "所选时段已被预约")
+
+    appointment.status = "RESCHEDULED"
+    appointment.cancel_by = user.id
+    appointment.cancel_reason = "改期"
+    await _record_event(db, appointment.id, user.id, "USER", "RESCHEDULE", f"改期至新时段 {new_slot.id}")
+    if old_slot is not None and old_slot.status == "BOOKED":
+        old_slot.status = "AVAILABLE"
+
+    new_appointment = Appointment(
+        appointment_no=generate_appointment_no(),
+        user_id=user.id,
+        coach_id=coach.id,
+        service_id=service.id,
+        slot_id=new_slot.id,
+        need_desc=appointment.need_desc,
+        status="PENDING",
+        cancel_deadline_at=_cancel_deadline(new_slot),
+    )
+    db.add(new_appointment)
+    await db.flush()
+    await _record_event(db, new_appointment.id, user.id, "USER", "BOOKED", "改期后重新预约")
+    coach_user = await db.get(User, coach.user_id)
+    await notify(
+        db,
+        coach_user.id if coach_user else 0,
+        "APPOINTMENT",
+        "预约已改期",
+        f"{user.nickname}将预约改期到 {new_slot.date} {new_slot.start_time.strftime('%H:%M')}，请尽快确认。",
+    )
+    await db.commit()
+    await db.refresh(appointment)
+    await db.refresh(new_appointment)
+    return appointment, new_appointment
+
+
+async def mark_no_show_appointment(
+    db: AsyncSession,
+    actor: User,
+    appointment_id: int,
+    coach_profile_id: int | None = None,
+) -> Appointment:
+    """标记用户未赴约（教练端或管理员触发，落库 + 释放时段 + 通知用户）。"""
+    if actor.role == "ADMIN":
+        appointment = await db.get(Appointment, appointment_id)
+    elif coach_profile_id is not None:
+        appointment = await get_coach_appointment_or_404(db, coach_profile_id, appointment_id)
+    else:
+        raise AppError(403, "FORBIDDEN", "无权操作")
+    if appointment is None:
+        raise AppError(404, "APPOINTMENT_NOT_FOUND", "预约记录不存在")
+    if appointment.status not in ("PENDING", "CONFIRMED"):
+        raise AppError(409, "INVALID_STATE_TRANSITION", "当前状态不允许标记未赴约")
+    slot = await db.get(CoachSlot, appointment.slot_id)
+    if not _is_overdue_no_show(slot):
+        raise AppError(409, "APPOINTMENT_NOT_OVERDUE", "尚未到未赴约判定时间")
+    await _mark_no_show(db, appointment, actor.id, actor.role, "标记用户未赴约")
+    await notify(
+        db,
+        appointment.user_id,
+        "APPOINTMENT",
+        "预约未赴约",
+        "本次预约已超时未赴约，已记录；如需帮助请联系平台。",
+    )
     await db.commit()
     await db.refresh(appointment)
     return appointment
