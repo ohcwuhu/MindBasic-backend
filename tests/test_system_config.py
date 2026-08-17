@@ -22,6 +22,7 @@ def test_admin_get_configs(client, admin_headers):
         "disclaimer",
         "agreement_version",
         "agreement_content",
+        "ai_disclaimer",
     }
 
 

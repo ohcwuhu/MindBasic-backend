@@ -25,6 +25,10 @@ DEFAULT_CONFIGS: dict[str, dict[str, str]] = {
         "value": "本平台提供成长陪伴与自助工具，不提供心理疾病诊断或治疗服务；如有医疗需求，请前往正规医疗机构就诊。",
         "description": "免责声明",
     },
+    "ai_disclaimer": {
+        "value": "AI 生成内容，非人工心理服务，仅供参考；不提供诊断或治疗，如处于危机请拨打 12356。",
+        "description": "AI 生成内容标识与免责说明",
+    },
     "agreement_version": {
         "value": "1",
         "description": "服务协议版本号",
@@ -67,7 +71,7 @@ async def get_all_configs(db: AsyncSession) -> list[dict]:
 
 
 async def get_public_config(db: AsyncSession) -> dict:
-    """公开合规信息：平台名称 / 援助热线 / 紧急求助说明 / 免责声明。"""
+    """公开合规信息：平台名称 / 援助热线 / 紧急求助说明 / 免责声明 / AI 标识。"""
     rows = {
         row.config_key: row.config_value
         for row in await db.scalars(
@@ -79,6 +83,7 @@ async def get_public_config(db: AsyncSession) -> dict:
         "hotline": rows.get("hotline", DEFAULT_CONFIGS["hotline"]["value"]),
         "emergencyHint": rows.get("emergency_hint", DEFAULT_CONFIGS["emergency_hint"]["value"]),
         "disclaimer": rows.get("disclaimer", DEFAULT_CONFIGS["disclaimer"]["value"]),
+        "aiDisclaimer": rows.get("ai_disclaimer", DEFAULT_CONFIGS["ai_disclaimer"]["value"]),
     }
 
 
