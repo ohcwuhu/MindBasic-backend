@@ -9,6 +9,7 @@ class RegisterIn(ApiModel):
     phone: str = Field(pattern=r"^1\d{10}$", max_length=20)
     password: str = Field(min_length=8, max_length=64)
     nickname: str = Field(min_length=1, max_length=20)
+    gender: Literal["boy", "girl"] = "girl"
     privacy_agreed: bool
 
 
@@ -23,6 +24,7 @@ class UserOut(ApiModel):
     email: str | None = None
     nickname: str
     avatarUrl: str | None = None
+    gender: Literal["boy", "girl"]
     role: Literal["USER", "COACH", "ADMIN"]
     isDisabled: bool
     createdAt: str
@@ -44,6 +46,7 @@ class TokenOut(ApiModel):
 class UserPatchIn(ApiModel):
     nickname: str | None = Field(default=None, min_length=1, max_length=20)
     avatarUrl: str | None = Field(default=None, max_length=512)
+    gender: Literal["boy", "girl"] | None = None
 
 
 class ChangePasswordIn(ApiModel):
