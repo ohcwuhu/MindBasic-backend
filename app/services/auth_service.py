@@ -17,6 +17,7 @@ from app.models.user import RefreshToken, User
 from app.models.email_code import EmailVerificationCode
 from app.schemas.auth import UserOut
 from app.services import email_service
+from app.services.system_config_service import get_config_value
 from app.utils.time import utcnow_naive
 from app.utils.format import mask_phone
 
@@ -113,6 +114,12 @@ def to_user_out(user: User) -> UserOut:
         gender=user.gender,  # type: ignore[arg-type]
         role=user.role,  # type: ignore[arg-type]
         isDisabled=user.status != "ENABLED",
+        agreementVersion=user.agreement_version,
+        agreementAcceptedAt=(
+            user.agreement_accepted_at.isoformat() + "Z"
+            if user.agreement_accepted_at is not None
+            else None
+        ),
         createdAt=created_at,
     )
 
@@ -122,11 +129,22 @@ async def get_user_by_phone(db: AsyncSession, phone: str) -> User | None:
     return await db.scalar(stmt)
 
 
-async def register_user(db: AsyncSession, phone: str, password: str, nickname: str, privacy_agreed: bool, gender: str = "girl") -> User:
+async def register_user(
+    db: AsyncSession,
+    phone: str,
+    password: str,
+    nickname: str,
+    privacy_agreed: bool,
+    service_agreed: bool,
+    gender: str = "girl",
+) -> User:
     if not privacy_agreed:
         raise AppError(400, "VALIDATION_ERROR", "请先阅读并同意隐私政策")
+    if not service_agreed:
+        raise AppError(400, "VALIDATION_ERROR", "请先阅读并同意《服务协议》")
     if await get_user_by_phone(db, phone) is not None:
         raise AppError(409, "PHONE_EXISTS", "该手机号已注册")
+    agreement_version = await get_config_value(db, "agreement_version")
     user = User(
         phone=phone,
         password_hash=hash_password(password),
@@ -135,6 +153,8 @@ async def register_user(db: AsyncSession, phone: str, password: str, nickname: s
         role="USER",
         status="ENABLED",
         privacy_agreed=True,
+        agreement_version=agreement_version,
+        agreement_accepted_at=utcnow_naive(),
     )
     db.add(user)
     await db.commit()

@@ -19,3 +19,8 @@ class PublicPlatformConfigOut(ApiModel):
     hotline: str
     emergency_hint: str
     disclaimer: str
+
+
+class AgreementOut(ApiModel):
+    version: str
+    content: str

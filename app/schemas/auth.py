@@ -11,6 +11,7 @@ class RegisterIn(ApiModel):
     nickname: str = Field(min_length=1, max_length=20)
     gender: Literal["boy", "girl"] = "girl"
     privacy_agreed: bool
+    service_agreed: bool
 
 
 class LoginIn(ApiModel):
@@ -27,6 +28,8 @@ class UserOut(ApiModel):
     gender: Literal["boy", "girl"]
     role: Literal["USER", "COACH", "ADMIN"]
     isDisabled: bool
+    agreementVersion: str | None = None
+    agreementAcceptedAt: str | None = None
     createdAt: str
 
 
