@@ -40,6 +40,7 @@ from app.services.chat_socket import register_chat_socket_events
 from app.core.config import cors_origin_list, settings
 from app.core.exceptions import AppError
 from app.core.logging import get_logger, setup_logging
+from app.core.scheduler import shutdown_scheduler, start_scheduler
 
 setup_logging()
 logger = get_logger("mindbasic")
@@ -78,9 +79,11 @@ def _background_warmup() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    """服务启动后后台预热 AI 模型；仅真实服务器触发，测试导入不受影响。"""
+    """服务启动后后台预热 AI 模型 + 启动定时任务；测试导入不受影响。"""
     threading.Thread(target=_background_warmup, daemon=True).start()
+    start_scheduler()
     yield
+    shutdown_scheduler()
 
 
 app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)

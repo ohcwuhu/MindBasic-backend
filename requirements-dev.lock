@@ -9,6 +9,7 @@ alembic==1.19.1
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anyio==4.14.2
+apscheduler==3.11.3
 asyncmy==0.2.14
 bcrypt==5.0.0
 bleach==6.4.0
@@ -45,6 +46,8 @@ sqlalchemy==2.0.51
 starlette==1.6.0
 typing-extensions==4.16.0
 typing-inspection==0.4.3
+tzdata==2026.3
+tzlocal==5.4.4
 uvicorn==0.52.1
 watchfiles==1.2.0
 webencodings==0.5.1

@@ -235,3 +235,27 @@ def export_path(record: DataExport) -> Path:
     if path.name != record.file_id or not path.is_file():
         raise AppError(404, "NOT_FOUND", "导出文件不存在")
     return path
+
+
+async def cleanup_expired_exports(db: AsyncSession) -> int:
+    """清理已过期的导出：删除磁盘文件并标记 EXPIRED（定时任务调用）。"""
+    now = utcnow_naive()
+    rows = list(
+        await db.scalars(
+            select(DataExport).where(
+                DataExport.status == "READY",
+                DataExport.expires_at.is_not(None),
+                DataExport.expires_at < now,
+            )
+        )
+    )
+    for record in rows:
+        path = EXPORT_DIR / record.file_id
+        if path.name == record.file_id and path.is_file():
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        record.status = "EXPIRED"
+    await db.commit()
+    return len(rows)
