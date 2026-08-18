@@ -678,6 +678,31 @@ def register_socket_events(sio, log):
                 history.extend(session.get_chat_history()[-12:])
                 log.info("[VC] %s | [3/5] LLM 请求构造完成, history=%d 条", sid, len(history))
 
+                # Dify 智能体入参（对应 chatflow start 节点变量：多模态情绪上下文）
+                _emo_ctx = session.emotion_context
+                _facial_cn = _emo_ctx.get("live_level", "")
+                _facial_conf = float(_emo_ctx.get("live_score", 0) or 0)
+                _voice_cn = voice_result.get("emotion_cn", "") if voice_result else ""
+                _voice_conf = float(voice_result.get("confidence", 0) or 0) if voice_result else 0
+                _text_cn = text_result.get("emotion_cn", "") if text_result else ""
+                _text_conf = float(text_result.get("confidence", 0) or 0) if text_result else 0
+                dify_inputs = {
+                    "user_utterance": asr_text,
+                    "fusion_emotion_cn": _emo_ctx.get("fusion_emotion", ""),
+                    "fusion_confidence": float(_emo_ctx.get("fusion_confidence", 0) or 0),
+                    "facial_emotion_cn": _facial_cn,
+                    "facial_confidence": _facial_conf,
+                    "voice_emotion_cn": _voice_cn,
+                    "voice_confidence": _voice_conf,
+                    "text_emotion_cn": _text_cn,
+                    "text_confidence": _text_conf,
+                    "live_score": _facial_conf,
+                    "live_level": _facial_cn,
+                    "asr_text": asr_text,
+                    "visual_description": visual_context,
+                }
+                log.info("[VC] %s | Dify inputs: %s", sid, {k: v for k, v in dify_inputs.items() if v})
+
                 # ── 4) LLM 流式输出 + TTS 联动 ─────────────────────
                 session.state = realtime_session.STATE_SPEAKING
                 await sio.emit("vc_state_change", {"state": "speaking"}, room=sid)
@@ -704,7 +729,7 @@ def register_socket_events(sio, log):
                                     "Content-Type": "application/json",
                                 },
                                 json={
-                                    "inputs": {},
+                                    "inputs": dify_inputs,
                                     "query": asr_text,
                                     "response_mode": "streaming",
                                     "user": f"mb-{_dify_user}",

@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     email_code_ttl_minutes: int = 10
     # AI 实验室：DeepSeek 心理教练
     deepseek_api_key: str = ""
+    # AI 实验室：Dify 智能体（视频通话 LLM，可选；配置后优先使用）
+    dify_api_base: str = "https://api.dify.ai/v1"
+    dify_api_key: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",
