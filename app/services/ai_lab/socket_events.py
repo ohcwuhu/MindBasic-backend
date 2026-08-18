@@ -716,55 +716,61 @@ def register_socket_events(sio, log):
                 _first_tts_t: float | None = None
 
                 def _call_llm_stream():
-                    """在 executor 中调用 LLM 流式 API（Dify / DeepSeek）。"""
+                    """在 executor 中调用 LLM 流式 API（Dify / DeepSeek），连接失败自动重试。"""
+                    import time as _t
                     import requests as _requests
-                    if use_dify:
-                        _dify_user = clients.get(sid, {}).get("user_id") or sid
-                        log.info("[VC] %s | Dify HTTP POST -> %s/chat-messages", sid, _cfg.DIFY_API_BASE)
+                    last_exc: Exception | None = None
+                    for _attempt in range(1, _cfg.LLM_RETRIES + 1):
                         try:
-                            return _requests.post(
-                                f"{_cfg.DIFY_API_BASE}/chat-messages",
+                            if use_dify:
+                                _dify_user = clients.get(sid, {}).get("user_id") or sid
+                                log.info("[VC] %s | Dify HTTP POST -> %s/chat-messages (attempt %d/%d)",
+                                         sid, _cfg.DIFY_API_BASE, _attempt, _cfg.LLM_RETRIES)
+                                resp = _requests.post(
+                                    f"{_cfg.DIFY_API_BASE}/chat-messages",
+                                    headers={
+                                        "Authorization": f"Bearer {_api_key}",
+                                        "Content-Type": "application/json",
+                                    },
+                                    json={
+                                        "inputs": dify_inputs,
+                                        "query": asr_text,
+                                        "response_mode": "streaming",
+                                        "user": f"mb-{_dify_user}",
+                                        "conversation_id": session.dify_conversation_id,
+                                    },
+                                    timeout=_cfg.DIFY_TIMEOUT,
+                                    stream=True,
+                                )
+                                log.info("[VC] %s | Dify HTTP 响应: status=%s", sid, resp.status_code)
+                                return resp
+                            log.info("[VC] %s | DeepSeek HTTP POST -> %s/chat/completions | model=%s (attempt %d/%d)",
+                                     sid, _cfg.DEEPSEEK_BASE_URL, _cfg.DEEPSEEK_MODEL, _attempt, _cfg.LLM_RETRIES)
+                            resp = _requests.post(
+                                f"{_cfg.DEEPSEEK_BASE_URL}/chat/completions",
                                 headers={
                                     "Authorization": f"Bearer {_api_key}",
                                     "Content-Type": "application/json",
                                 },
                                 json={
-                                    "inputs": dify_inputs,
-                                    "query": asr_text,
-                                    "response_mode": "streaming",
-                                    "user": f"mb-{_dify_user}",
-                                    "conversation_id": session.dify_conversation_id,
+                                    "model": _cfg.DEEPSEEK_MODEL,
+                                    "messages": history,
+                                    "temperature": 0.7,
+                                    "max_tokens": 500,
+                                    "stream": True,
                                 },
-                                timeout=_cfg.DIFY_TIMEOUT,
+                                timeout=_cfg.DEEPSEEK_TIMEOUT,
                                 stream=True,
                             )
+                            log.info("[VC] %s | DeepSeek HTTP 响应: status=%s", sid, resp.status_code)
+                            return resp
                         except Exception as _e:
-                            log.error("[VC] %s | Dify HTTP 请求异常: %s", sid, _e, exc_info=True)
-                            raise
-                    log.info("[VC] %s | DeepSeek HTTP POST -> %s/chat/completions | model=%s",
-                             sid, _cfg.DEEPSEEK_BASE_URL, _cfg.DEEPSEEK_MODEL)
-                    try:
-                        resp = _requests.post(
-                            f"{_cfg.DEEPSEEK_BASE_URL}/chat/completions",
-                            headers={
-                                "Authorization": f"Bearer {_api_key}",
-                                "Content-Type": "application/json",
-                            },
-                            json={
-                                "model": _cfg.DEEPSEEK_MODEL,
-                                "messages": history,
-                                "temperature": 0.7,
-                                "max_tokens": 500,
-                                "stream": True,
-                            },
-                            timeout=_cfg.DEEPSEEK_TIMEOUT,
-                            stream=True,
-                        )
-                        log.info("[VC] %s | DeepSeek HTTP 响应: status=%s", sid, resp.status_code)
-                        return resp
-                    except Exception as _e:
-                        log.error("[VC] %s | DeepSeek HTTP 请求异常: %s", sid, _e, exc_info=True)
-                        raise
+                            last_exc = _e
+                            log.warning("[VC] %s | LLM 请求第 %d/%d 次失败: %s",
+                                        sid, _attempt, _cfg.LLM_RETRIES, _e)
+                            if _attempt < _cfg.LLM_RETRIES:
+                                _t.sleep(0.5 * _attempt)
+                    raise last_exc  # type: ignore[misc]
 
                 try:
                     resp = await loop.run_in_executor(None, _call_llm_stream)
@@ -772,7 +778,7 @@ def register_socket_events(sio, log):
                     log.error("[VC] %s | LLM 调用失败 (executor): %s", sid, _e)
                     await sio.emit("vc_error", {
                         "stage": "llm",
-                        "message": f"LLM 请求异常: {_e}"
+                        "message": "AI 服务连接失败，请稍后重试"
                     }, room=sid)
                     return
 

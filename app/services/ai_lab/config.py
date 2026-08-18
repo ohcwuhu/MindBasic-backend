@@ -43,6 +43,9 @@ DIFY_API_BASE: str = settings.dify_api_base or os.environ.get("DIFY_API_BASE", "
 DIFY_API_KEY: str = settings.dify_api_key or os.environ.get("DIFY_API_KEY", "")
 DIFY_TIMEOUT: int = int(os.environ.get("DIFY_TIMEOUT", "90"))
 
+# LLM 请求失败自动重试次数（连接异常如 SSL EOF / 超时）
+LLM_RETRIES: int = int(os.environ.get("LLM_RETRIES", "3"))
+
 # TTS 语音合成（edge-tts，免费无需 API Key）
 TTS_VOICE: str = os.environ.get("TTS_VOICE", "zh-CN-XiaoxiaoNeural")
 TTS_RATE: str = os.environ.get("TTS_RATE", "+20%")

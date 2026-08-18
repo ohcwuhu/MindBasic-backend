@@ -115,6 +115,7 @@ pytest tests -q
 | `SMTP_HOST/PORT/USER/PASSWORD/FROM` | 否 | 邮箱发送；QQ/163 用 465（SSL），STARTTLS 服务用 587 |
 | `DEEPSEEK_API_KEY` | 否 | DeepSeek Key，AI 心理教练；未配置时 `/api/ai_coach/chat` 返回 503 |
 | `DIFY_API_BASE` / `DIFY_API_KEY` | 否 | Dify 智能体（视频通话 LLM）；配置 Key 后优先走 Dify（云端 `https://api.dify.ai/v1`，本地 Docker 用 `http://<host>:18080/v1`），未配置回退 DeepSeek |
+| `LLM_RETRIES` | 否 | LLM 请求连接失败自动重试次数，默认 3（应对 SSL EOF / 超时等瞬时故障） |
 | `SENSEVOICE_DEVICE` | 否 | SenseVoice 设备，留空自动检测（`cuda`/`cpu`） |
 | `DEEPSEEK_BASE_URL/MODEL/TIMEOUT` | 否 | DeepSeek 覆盖项（默认 api.deepseek.com / deepseek-chat / 90s） |
 | `TTS_VOICE` / `TTS_RATE` | 否 | 视频通话语音合成（edge-tts，免费）；默认 `zh-CN-XiaoxiaoNeural` / `+20%` |
