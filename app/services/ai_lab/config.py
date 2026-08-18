@@ -38,6 +38,11 @@ DEEPSEEK_BASE_URL: str = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepse
 DEEPSEEK_MODEL: str = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 DEEPSEEK_TIMEOUT: int = int(os.environ.get("DEEPSEEK_TIMEOUT", "90"))
 
+# Dify 智能体（可选）：配置 DIFY_API_KEY 后，视频通话 LLM 走 Dify 对话接口，否则回退 DeepSeek
+DIFY_API_BASE: str = os.environ.get("DIFY_API_BASE", "https://api.dify.ai/v1")
+DIFY_API_KEY: str = os.environ.get("DIFY_API_KEY", "")
+DIFY_TIMEOUT: int = int(os.environ.get("DIFY_TIMEOUT", "90"))
+
 # TTS 语音合成（edge-tts，免费无需 API Key）
 TTS_VOICE: str = os.environ.get("TTS_VOICE", "zh-CN-XiaoxiaoNeural")
 TTS_RATE: str = os.environ.get("TTS_RATE", "+20%")

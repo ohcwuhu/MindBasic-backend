@@ -453,17 +453,22 @@ def register_socket_events(sio, log):
             file_size = os.path.getsize(audio_path)
             log.info("[VC] %s | >>> 管线开始: %s (%sKB)", sid, audio_path, round(file_size/1024, 1))
 
-            # ── 0) 前置检查：DeepSeek API Key 配置 ───────────────
-            _api_key = _cfg.DEEPSEEK_API_KEY or ""
-            if not _api_key.strip():
-                log.error("[VC] %s | DEEPSEEK_API_KEY 未配置！请在后端 .env 中设置 DEEPSEEK_API_KEY=你的密钥", sid)
-                await sio.emit("vc_error", {
-                    "stage": "config",
-                    "message": "LLM API Key 未配置，请在后端 .env 文件中设置 DEEPSEEK_API_KEY"
-                }, room=sid)
-                return
-            log.info("[VC] %s | DeepSeek 配置 OK | key_len=%d | base_url=%s | model=%s | timeout=%ds",
-                     sid, len(_api_key), _cfg.DEEPSEEK_BASE_URL, _cfg.DEEPSEEK_MODEL, _cfg.DEEPSEEK_TIMEOUT)
+            # ── 0) 前置检查：LLM API Key（Dify 优先，未配置时回退 DeepSeek）──
+            use_dify = bool((_cfg.DIFY_API_KEY or "").strip())
+            if use_dify:
+                _api_key = _cfg.DIFY_API_KEY or ""
+                log.info("[VC] %s | Dify 配置 OK | base=%s | key_len=%d", sid, _cfg.DIFY_API_BASE, len(_api_key))
+            else:
+                _api_key = _cfg.DEEPSEEK_API_KEY or ""
+                if not _api_key.strip():
+                    log.error("[VC] %s | LLM API Key 未配置！请在后端 .env 中设置 DIFY_API_KEY 或 DEEPSEEK_API_KEY", sid)
+                    await sio.emit("vc_error", {
+                        "stage": "config",
+                        "message": "LLM API Key 未配置，请设置 DIFY_API_KEY 或 DEEPSEEK_API_KEY"
+                    }, room=sid)
+                    return
+                log.info("[VC] %s | DeepSeek 配置 OK | key_len=%d | base_url=%s | model=%s | timeout=%ds",
+                         sid, len(_api_key), _cfg.DEEPSEEK_BASE_URL, _cfg.DEEPSEEK_MODEL, _cfg.DEEPSEEK_TIMEOUT)
 
             try:
                 # ── 1) SenseVoice ASR ──────────────────────────────
@@ -676,8 +681,8 @@ def register_socket_events(sio, log):
                 # ── 4) LLM 流式输出 + TTS 联动 ─────────────────────
                 session.state = realtime_session.STATE_SPEAKING
                 await sio.emit("vc_state_change", {"state": "speaking"}, room=sid)
-                log.info("[VC] %s | [4/5] 开始 DeepSeek 流式请求 | base_url=%s | model=%s | timeout=%ds...",
-                         sid, _cfg.DEEPSEEK_BASE_URL, _cfg.DEEPSEEK_MODEL, _cfg.DEEPSEEK_TIMEOUT)
+                _llm_provider = "Dify" if use_dify else "DeepSeek"
+                log.info("[VC] %s | [4/5] 开始 %s 流式请求 ...", sid, _llm_provider)
 
                 full_response = ""
                 sentence_buffer = ""
@@ -686,8 +691,31 @@ def register_socket_events(sio, log):
                 _first_tts_t: float | None = None
 
                 def _call_llm_stream():
-                    """在 executor 中调用 DeepSeek 流式 API。"""
+                    """在 executor 中调用 LLM 流式 API（Dify / DeepSeek）。"""
                     import requests as _requests
+                    if use_dify:
+                        _dify_user = clients.get(sid, {}).get("user_id") or sid
+                        log.info("[VC] %s | Dify HTTP POST -> %s/chat-messages", sid, _cfg.DIFY_API_BASE)
+                        try:
+                            return _requests.post(
+                                f"{_cfg.DIFY_API_BASE}/chat-messages",
+                                headers={
+                                    "Authorization": f"Bearer {_api_key}",
+                                    "Content-Type": "application/json",
+                                },
+                                json={
+                                    "inputs": {},
+                                    "query": asr_text,
+                                    "response_mode": "streaming",
+                                    "user": f"mb-{_dify_user}",
+                                    "conversation_id": session.dify_conversation_id,
+                                },
+                                timeout=_cfg.DIFY_TIMEOUT,
+                                stream=True,
+                            )
+                        except Exception as _e:
+                            log.error("[VC] %s | Dify HTTP 请求异常: %s", sid, _e, exc_info=True)
+                            raise
                     log.info("[VC] %s | DeepSeek HTTP POST -> %s/chat/completions | model=%s",
                              sid, _cfg.DEEPSEEK_BASE_URL, _cfg.DEEPSEEK_MODEL)
                     try:
@@ -761,10 +789,30 @@ def register_socket_events(sio, log):
                         break
                     try:
                         chunk_data = _json.loads(data_str)
-                        delta = chunk_data.get("choices", [{}])[0].get("delta", {})
-                        token = delta.get("content", "")
-                        if not token:
-                            continue
+                        if use_dify:
+                            event = chunk_data.get("event", "")
+                            if event == "message_end":
+                                _cid = chunk_data.get("conversation_id")
+                                if _cid:
+                                    session.dify_conversation_id = _cid
+                                log.info("[VC] %s | Dify message_end | conversation_id=%s",
+                                         sid, session.dify_conversation_id)
+                                break
+                            if event == "error":
+                                _err = chunk_data.get("message") or "Dify 智能体错误"
+                                log.error("[VC] %s | Dify 错误事件: %s", sid, _err)
+                                await sio.emit("vc_error", {"stage": "llm", "message": _err}, room=sid)
+                                break
+                            if event not in ("message", "agent_message"):
+                                continue
+                            token = chunk_data.get("answer") or ""
+                            if not token:
+                                continue
+                        else:
+                            delta = chunk_data.get("choices", [{}])[0].get("delta", {})
+                            token = delta.get("content", "")
+                            if not token:
+                                continue
                         token_count += 1
                         full_response += token
                         sentence_buffer += token

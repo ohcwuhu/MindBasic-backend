@@ -60,6 +60,9 @@ class VideoCallSession:
     # VLM 上次的视觉描述（供 LLM 上下文引用）
     last_visual_description: str = ""
 
+    # Dify 会话 ID（多轮上下文由 Dify 维护）
+    dify_conversation_id: str = ""
+
     # 中断标志
     interrupted: bool = False
 
@@ -131,6 +134,7 @@ class VideoCallSession:
         self.chat_history.clear()
         self.latest_frame = ""
         self.last_visual_description = ""
+        self.dify_conversation_id = ""
         self.emotion_context.clear()
         self.state = STATE_IDLE
         self.interrupted = False
