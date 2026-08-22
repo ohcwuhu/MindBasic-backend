@@ -63,7 +63,9 @@ async def _seed_conversation(user_id: int) -> int:
         return conv.id
 
 
-def test_ai_conversation_persistence(client):
+def test_ai_conversation_persistence(client, monkeypatch):
+    # 测试不调用真实 LLM 总结：禁用 DeepSeek，走启发式摘要
+    monkeypatch.setattr("app.services.ai_conversation_service.settings.deepseek_api_key", "")
     acc = register(client)
     other = register(client)
     try:
@@ -96,6 +98,51 @@ def test_ai_conversation_persistence(client):
         # 非本人不可见
         other_view = client.get(f"/api/v1/ai-conversations/{conv_id}", headers=other["headers"])
         assert other_view.status_code == 404
+
+        # 总结 → 返回草稿（不落库）
+        resp = client.post(f"/api/v1/ai-conversations/{conv_id}/summary", headers=acc["headers"])
+        assert resp.status_code == 201
+        draft = resp.json()["data"]
+        assert draft["moodType"] == "ANXIOUS"
+        assert draft["source"] == "SELF_COACHING"
+        assert draft["conversationId"] == conv_id
+        assert "学习压力" in draft["content"]
+
+        # 提交为情绪日记（标注自我教练来源）
+        resp = client.post(
+            "/api/v1/emotion-journals",
+            headers=acc["headers"],
+            json={
+                "moodType": draft["moodType"],
+                "content": draft["content"],
+                "source": "SELF_COACHING",
+                "sourceConversationId": conv_id,
+            },
+        )
+        assert resp.status_code == 201
+        journal = resp.json()["data"]
+        assert journal["source"] == "SELF_COACHING"
+        assert journal["sourceConversationId"] == conv_id
+        assert journal["feedback"]
+
+        # 幂等：同一对话只能生成一次
+        again = client.post(
+            "/api/v1/emotion-journals",
+            headers=acc["headers"],
+            json={
+                "moodType": "CALM",
+                "content": "重复",
+                "source": "SELF_COACHING",
+                "sourceConversationId": conv_id,
+            },
+        )
+        assert again.status_code == 409
+
+        # 会话关联上 journalId，且情绪日记列表可见
+        detail = client.get(f"/api/v1/ai-conversations/{conv_id}", headers=acc["headers"]).json()["data"]
+        assert detail["conversation"]["journalId"] == journal["id"]
+        journals = client.get("/api/v1/emotion-journals?page=1&pageSize=10", headers=acc["headers"]).json()["data"]["items"]
+        assert any(j["id"] == journal["id"] for j in journals)
     finally:
         cleanup(acc["phone"])
         cleanup(other["phone"])
