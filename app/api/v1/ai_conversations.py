@@ -8,6 +8,7 @@ from app.api.response import ok, paginated
 from app.models.user import User
 from app.schemas.ai_conversation import AiConversationOut, AiMessageOut
 from app.services.ai_conversation_service import (
+    generate_summary_draft,
     get_ai_conversation_or_404,
     list_ai_conversations,
     list_ai_messages,
@@ -46,10 +47,30 @@ async def ai_conversation_detail(
                 title=conv.title,
                 status=conv.status,
                 message_count=conv.message_count,
+                journal_id=conv.journal_id,
                 created_at=to_iso(conv.created_at) or "",
                 updated_at=to_iso(conv.updated_at) or "",
             ).model_dump(by_alias=True),
             "messages": [AiMessageOut(**m).model_dump(by_alias=True) for m in messages],
+        },
+        trace_id=request.state.trace_id,
+    )
+
+
+@router.post("/{conversation_id}/summary", status_code=201)
+async def ai_conversation_summary(
+    conversation_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+) -> dict:
+    draft = await generate_summary_draft(db, user, conversation_id)
+    return ok(
+        {
+            "moodType": draft["mood_type"],
+            "content": draft["content"],
+            "source": draft["source"],
+            "conversationId": draft["conversation_id"],
         },
         trace_id=request.state.trace_id,
     )

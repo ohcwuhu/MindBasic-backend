@@ -1046,6 +1046,7 @@ def register_socket_events(sio, log):
                     conv = await get_or_create_active_conversation(db, _uid)
                 clients[sid]["ai_conv_id"] = conv.id
                 log.info("[VC] %s | AI 会话已就绪 conv=%s", sid, conv.id)
+                await sio.emit("vc_conversation_ready", {"conversationId": conv.id}, room=sid)
             except Exception as _e:
                 log.warning("[VC] %s | AI 会话初始化失败: %s", sid, _e)
         log.info("[VC] %s | 视频通话开始", sid)

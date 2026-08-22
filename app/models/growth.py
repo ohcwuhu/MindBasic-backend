@@ -162,6 +162,7 @@ class EmotionJournal(Base):
     __tablename__ = "emotion_journals"
     __table_args__ = (
         Index("idx_emotion_journals_user", "user_id", desc("created_at")),
+        UniqueConstraint("source_conversation_id", name="uq_emotion_journals_conv"),
         CheckConstraint(
             "mood_type IN ('CALM','HAPPY','ANXIOUS','DOWN','IRRITATED','OTHER')",
             name="chk_emotion_journals_mood",
@@ -177,6 +178,8 @@ class EmotionJournal(Base):
     mood_type = Column(String(16), nullable=False, comment="CALM/HAPPY/ANXIOUS/DOWN/IRRITATED/OTHER")
     content = Column(String(500), nullable=False, comment="一句话描述")
     feedback = Column(String(500), nullable=True, comment="话术快照")
+    source = Column(String(16), nullable=False, server_default="MANUAL", comment="MANUAL/SELF_COACHING")
+    source_conversation_id = Column(BIGINT(unsigned=True), nullable=True, comment="来源 AI 对话 ID")
     created_at = Column(DATETIME(fsp=3), nullable=False, server_default=text("CURRENT_TIMESTAMP(3)"))
 
 

@@ -6,6 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_async_db, get_current_user
 from app.api.response import ok, paginated
+from app.core.exceptions import AppError
+from app.models.ai_conversation import AiConversation
 from app.models.growth import EmotionJournal
 from app.models.user import User
 from app.schemas.emotion_journal import (
@@ -35,13 +37,34 @@ async def create_journal(
     db: AsyncSession = Depends(get_async_db),
 ) -> dict:
     feedback = await pick_feedback(db, body.mood_type)
+    source = body.source
+    source_conversation_id = body.source_conversation_id
+    if source_conversation_id is not None:
+        conv = await db.scalar(
+            select(AiConversation).where(
+                AiConversation.id == source_conversation_id,
+                AiConversation.user_id == user.id,
+            )
+        )
+        if conv is None:
+            raise AppError(404, "NOT_FOUND", "对话记录不存在")
+        if conv.journal_id is not None:
+            raise AppError(409, "JOURNAL_EXISTS", "该对话已生成情绪日记")
+        source = "SELF_COACHING"
     journal = EmotionJournal(
         user_id=user.id,
         mood_type=body.mood_type,
         content=body.content.strip(),
         feedback=feedback,
+        source=source,
+        source_conversation_id=source_conversation_id,
     )
     db.add(journal)
+    if source_conversation_id is not None:
+        await db.flush()
+        conv = await db.get(AiConversation, source_conversation_id)
+        if conv is not None:
+            conv.journal_id = journal.id
     await maybe_flag_crisis(db, user.id, "EMOTION_JOURNAL", body.content)
     await db.commit()
     await db.refresh(journal)

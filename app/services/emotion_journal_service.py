@@ -47,6 +47,8 @@ def journal_to_out(journal: EmotionJournal) -> dict:
         "mood_type": journal.mood_type,
         "content": journal.content,
         "feedback": journal.feedback,
+        "source": journal.source,
+        "source_conversation_id": journal.source_conversation_id,
         "created_at": to_iso(journal.created_at),
     }
 
