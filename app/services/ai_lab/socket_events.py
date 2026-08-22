@@ -25,6 +25,8 @@ import time
 import base64
 from datetime import datetime
 
+from app.db.session import AsyncSessionLocal
+
 # cv2 / numpy / DeepFace 在函数内懒加载，避免应用启动即加载 TensorFlow/torch
 
 # ─── 面部时序缓冲（供 HTTP 层 /api/analyze_audio 融合时查询）─────────
@@ -223,6 +225,15 @@ def register_socket_events(sio, log):
     #       推理队列等异步任务，需在此处一并 cancel/close，杜绝内存泄漏。
     @sio.on("disconnect")
     async def handle_disconnect(sid):
+        _conv_id = clients.get(sid, {}).get("ai_conv_id") if sid in clients else None
+        if _conv_id:
+            try:
+                from app.services.ai_conversation_service import end_ai_conversation
+                async with AsyncSessionLocal() as db:
+                    await end_ai_conversation(db, _conv_id)
+                log.info("[VC] %s | 断线，AI 会话 %s 已结束", sid, _conv_id)
+            except Exception as _e:
+                log.warning("[VC] %s | 断线结束 AI 会话失败: %s", sid, _e)
         if sid in clients:
             client = clients.pop(sid)
             duration = round(time.time() - client.get("connect_at", time.time()), 2)
@@ -703,6 +714,24 @@ def register_socket_events(sio, log):
                 }
                 log.info("[VC] %s | Dify inputs: %s", sid, {k: v for k, v in dify_inputs.items() if v})
 
+                # 持久化：用户消息（含情绪上下文快照）
+                _persist_uid = clients.get(sid, {}).get("user_id")
+                _persist_conv = clients.get(sid, {}).get("ai_conv_id")
+                if _persist_uid and _persist_conv:
+                    try:
+                        _emotion_snapshot = {
+                            "fusion_emotion_cn": _emo_ctx.get("fusion_emotion", ""),
+                            "fusion_confidence": _emo_ctx.get("fusion_confidence", 0),
+                            "voice_emotion_cn": _voice_cn,
+                            "text_emotion_cn": _text_cn,
+                            "live_level": _facial_cn,
+                        }
+                        from app.services.ai_conversation_service import append_ai_message
+                        async with AsyncSessionLocal() as db:
+                            await append_ai_message(db, _persist_conv, "USER", asr_text, emotion=_emotion_snapshot)
+                    except Exception as _e:
+                        log.warning("[VC] %s | 用户消息持久化失败: %s", sid, _e)
+
                 # ── 4) LLM 流式输出 + TTS 联动 ─────────────────────
                 session.state = realtime_session.STATE_SPEAKING
                 await sio.emit("vc_state_change", {"state": "speaking"}, room=sid)
@@ -963,6 +992,13 @@ def register_socket_events(sio, log):
                     # 不管有没有被打断，只要生成了内容，就 emit 给前端显示
                     await sio.emit("vc_llm_done", {"full_response": full_response}, room=sid)
                     session.add_chat_message("assistant", full_response)
+                    if _persist_uid and _persist_conv:
+                        try:
+                            from app.services.ai_conversation_service import append_ai_message
+                            async with AsyncSessionLocal() as db:
+                                await append_ai_message(db, _persist_conv, "ASSISTANT", full_response)
+                        except Exception as _e:
+                            log.warning("[VC] %s | AI 回复持久化失败: %s", sid, _e)
                     if _was_interrupted:
                         log.info("[VC] %s | <<< 管线结束（被打断，已保存 %d 字内容）", sid, len(full_response))
                     else:
@@ -1001,6 +1037,17 @@ def register_socket_events(sio, log):
         from app.services.ai_lab import realtime_session
         session = realtime_session.get_session(sid)
         session.state = realtime_session.STATE_LISTENING
+        # 持久化：新建 / 复用 ACTIVE 会话
+        _uid = clients.get(sid, {}).get("user_id")
+        if _uid:
+            try:
+                from app.services.ai_conversation_service import get_or_create_active_conversation
+                async with AsyncSessionLocal() as db:
+                    conv = await get_or_create_active_conversation(db, _uid)
+                clients[sid]["ai_conv_id"] = conv.id
+                log.info("[VC] %s | AI 会话已就绪 conv=%s", sid, conv.id)
+            except Exception as _e:
+                log.warning("[VC] %s | AI 会话初始化失败: %s", sid, _e)
         log.info("[VC] %s | 视频通话开始", sid)
         await sio.emit("vc_state_change", {"state": "listening"}, room=sid)
 
@@ -1010,6 +1057,15 @@ def register_socket_events(sio, log):
         from app.services.ai_lab import realtime_session
         if not realtime_session.has_session(sid):
             return
+        _conv_id = clients.get(sid, {}).get("ai_conv_id")
+        if _conv_id:
+            try:
+                from app.services.ai_conversation_service import end_ai_conversation
+                async with AsyncSessionLocal() as db:
+                    await end_ai_conversation(db, _conv_id)
+                log.info("[VC] %s | AI 会话 %s 已结束", sid, _conv_id)
+            except Exception as _e:
+                log.warning("[VC] %s | 结束 AI 会话失败: %s", sid, _e)
         session = realtime_session.get_session(sid)
         # 彻底取消所有进行中的任务
         session.llm_cancelled = True

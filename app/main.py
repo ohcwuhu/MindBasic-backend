@@ -15,6 +15,7 @@ from app.api.v1 import (
     admin_audit,
     admin_crisis,
     admin_orders,
+    ai_conversations,
     appointments,
     articles,
     auth,
@@ -240,6 +241,7 @@ app.include_router(admin_orders.router, prefix="/api/v1")
 app.include_router(admin_orders.wallet_router, prefix="/api/v1")
 app.include_router(admin_audit.router, prefix="/api/v1")
 app.include_router(admin_crisis.router, prefix="/api/v1")
+app.include_router(ai_conversations.router, prefix="/api/v1")
 
 # ─── AI 实验室：多模态音频分析 + AI 心理教练 ──────────────────────────
 app.include_router(ai_lab.router)
