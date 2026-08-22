@@ -10,6 +10,7 @@ class AiConversationOut(ApiModel):
     title: str
     status: Literal["ACTIVE", "ENDED"]
     message_count: int
+    journal_id: int | None = None
     created_at: str
     updated_at: str
 

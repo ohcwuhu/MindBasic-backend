@@ -32,6 +32,7 @@ class AiConversation(Base):
     status = Column(String(16), nullable=False, server_default="ACTIVE", comment="ACTIVE/ENDED")
     message_count = Column(Integer, nullable=False, server_default=text("0"))
     ended_at = Column(DATETIME(fsp=3), nullable=True)
+    journal_id = Column(BIGINT(unsigned=True), nullable=True, comment="由本对话生成的情绪日记 ID")
     created_at = Column(
         DATETIME(fsp=3),
         nullable=False,
