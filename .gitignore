@@ -1,20 +1,38 @@
+# ── Python / 虚拟环境 ───────────────────────────────────────
 .venv/
 venv/
-.idea/
-.vscode/
 __pycache__/
 *.pyc
-.env
 .pytest_cache/
-.coverage
-uvicorn*.log
-*.err.log
-*.out.log
-dev-*.log
 .ruff_cache/
+.coverage
+
+# ── 编辑器 / 系统 ───────────────────────────────────────────
+.idea/
+.vscode/
+.DS_Store
+
+# ── 敏感文件 ───────────────────────────────────────────────
+# .env 的所有变体都含密钥（Dify / DeepSeek Key、JWT_SECRET、数据库密码）。
+# 只放行模板 .env.example——新增 .env.local / .env.backup 时不会再被误提交。
+.env
+.env.*
+!.env.example
+# scripts/backup.sh 的输出是数据库转储与上传文件打包，含用户数据，不要入库
+backups/
+*.sql.gz
+*.tar.gz
+
+# ── 运行时产物 ─────────────────────────────────────────────
 uploads/
 exports/
-# 知识库索引由 scripts/build_kb_index.py 生成，不入库；
-# 但目录本身要保留，否则 Dockerfile 的 COPY data 在全新克隆上会失败
+*.log
+
+# ── 知识库 ─────────────────────────────────────────────────
+# 随代码发布的只有 knowledge_base/ 下的 .md 卡片。
+# 检索索引是构建产物（后端首次检索时自动生成），开发工具与索引都不入库。
+*.pkl
+knowledge_base/_工具/
+# data/ 目录本身要保留，否则 Dockerfile 的 COPY data 在全新克隆上会失败
 data/*
 !data/.gitkeep
