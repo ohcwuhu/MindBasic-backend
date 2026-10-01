@@ -14,7 +14,7 @@ python-multipart>=0.0.9
 python-socketio>=5.11.0
 # 上游 LLM（DeepSeek / Dify）与自检脚本的 HTTP 客户端
 requests>=2.31.0
-# 知识库检索（kb_service）中文分词：实时通话的 knowledge_context 依赖它
+# 知识库检索（kb_cards）中文分词：实时通话的 knowledge_context 依赖它
 jieba>=0.42.1
 APScheduler>=3.10,<4
 redis>=5.0.0

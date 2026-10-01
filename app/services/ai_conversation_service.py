@@ -255,6 +255,87 @@ async def start_session_safely(
         return None
 
 
+#: 断线重连续接时回填给模型的最近历史条数（与 realtime_session 的历史上限同量级）
+RESUME_HISTORY_LIMIT = 20
+
+
+#: 允许被"重连接回"的会话状态。
+#: ``ACTIVE``  = 会话仍在进行；
+#: ``ABANDONED`` = 连接异常断开（socket 掉线）被标记为中断——这类恰恰是要接回来的；
+#: ``ENDED``    = 用户主动挂断，不允许再接回（否则会把已结束的通话续写下去）。
+RESUMABLE_STATUSES = ("ACTIVE", "ABANDONED")
+
+
+async def resume_session_safely(
+    *,
+    conversation_id: int | None,
+    user_id: int | None,
+    client_session_id: str,
+) -> tuple[int | None, list[dict[str, str]]]:
+    """断线重连时接回原会话，并返回可直接用于判阶段与生成的历史。
+
+    背景：通话会话绑在 socket sid 上。断线重连会拿到新的 sid，
+    服务端因此会认为是全新通话——若照原逻辑 ``start_session_safely``，
+    一次通话会被拆成两条记录，且模型丢失全部上下文（表现为"教练突然失忆"）。
+
+    Args:
+        conversation_id: 客户端带回来的原会话 id。
+        user_id: 当前连接已认证的用户；用于校验会话归属。
+        client_session_id: 新的 sid，仅用于日志。
+
+    Returns:
+        ``(会话 id, 历史消息)``。无法接回时返回 ``(None, [])``，
+        调用方应退回"新建会话"。
+    """
+    if not conversation_id:
+        return None, []
+    try:
+        cid = int(conversation_id)
+    except (TypeError, ValueError):
+        return None, []
+
+    try:
+        async with AsyncSessionLocal() as db:
+            conversation = await db.get(AiConversation, cid)
+            if conversation is None:
+                _log.info("重连接回失败：会话 %s 不存在", cid)
+                return None, []
+            if conversation.status not in RESUMABLE_STATUSES:
+                _log.info(
+                    "重连接回失败：会话 %s 状态为 %s（用户已挂断，不再接回）",
+                    cid, conversation.status,
+                )
+                return None, []
+            # 只允许接回自己的会话，避免用别人的 id 续写记录
+            if (
+                user_id is not None
+                and conversation.user_id is not None
+                and int(conversation.user_id) != int(user_id)
+            ):
+                _log.warning("重连接回被拒绝：会话 %s 不属于 user=%s", cid, user_id)
+                return None, []
+            messages = await list_ai_messages(db, cid)
+            if conversation.status == "ABANDONED":
+                # 掉线被标记为中断的通话重新接上：回到 ACTIVE，清掉结束时间
+                conversation.status = "ACTIVE"
+                conversation.ended_at = None
+                await db.commit()
+
+        history = [
+            {"role": str(m.get("role") or ""), "content": str(m.get("content") or "")}
+            for m in messages[-RESUME_HISTORY_LIMIT:]
+            if m.get("role") and m.get("content")
+        ]
+        _log.info(
+            "重连接回原会话 %s（sid=%s），回填历史 %d 条",
+            cid, client_session_id, len(history),
+        )
+        return cid, history
+    except Exception as exc:  # noqa: BLE001 - 接回失败不得影响通话
+        _log.warning("重连接回会话失败 conversation=%s sid=%s: %s", conversation_id, client_session_id, exc)
+        return None, []
+
+
 async def record_consent_change_safely(
     *,
     user_id: int | None,

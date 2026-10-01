@@ -60,31 +60,38 @@ def build_sample_inputs(query: str, stage: str) -> dict:
         "current_stage": stage,
         "goal_clear": False,
         "action_ready": False,
-        "should_summarize_hint": False,
+        # 与运行时一致：开始节点声明为 text-input，条件分支按小写 'true' 匹配
+        "should_summarize_hint": "false",
         "platform_risk_level": "NONE",
         "modality_conflict": False,
         "modality_conflict_reason": "",
-        # 平台侧自建检索的结果（jieba + BM25 + DeepSeek 重排）。
+        # 平台侧卡片知识库检索的结果（本地 jieba + BM25，按阶段与风险过滤）。
         # 开始节点把它声明成了必填，所以这里必须带上（可以是空串）。
         "knowledge_context": "",
     }
 
 
-def attach_knowledge_context(inputs: dict, query: str, top_k: int = 4) -> str:
-    """用本地检索填充 knowledge_context，返回参考资料文本。"""
+def attach_knowledge_context(
+    inputs: dict, query: str, *, stage: str | None = None, risk: str = "NONE"
+) -> str:
+    """用卡片知识库填充 knowledge_context，返回参考资料文本。"""
     try:
-        from app.services.ai_lab import kb_service
+        from app.services.ai_lab import kb_cards
 
-        block = kb_service.context_block_smart(query, top_k)
+        block = kb_cards.context_block(query, stage=stage, risk=risk)
     except Exception as exc:
-        print(f"{_WARN} 本地知识库检索不可用：{exc}")
+        print(f"{_WARN} 卡片知识库检索不可用：{exc}")
         return ""
     inputs["knowledge_context"] = block
     if block:
         hits = block.count("[资料")
-        print(f"{_OK} 本地知识库命中 {hits} 条，共 {len(block)} 字")
+        print(f"{_OK} 卡片知识库命中 {hits} 条，共 {len(block)} 字")
     else:
-        print(f"{_WARN} 本地知识库 0 命中（确认 data/kb_index.pkl 已构建）")
+        info = kb_cards.stats()
+        print(
+            f"{_WARN} 卡片知识库 0 命中，本轮不注入"
+            f"（ready={info.get('ready')} cards={info.get('cards')}）"
+        )
     return block
 
 
@@ -206,6 +213,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Dify 接入自检")
     parser.add_argument("--query", default=DEFAULT_QUERY, help="自检用的用户话语")
     parser.add_argument("--stage", default="exploration", help="回传给工作流的平台阶段")
+    parser.add_argument(
+        "--risk", default="NONE", help="平台风险等级 NONE/LOW/MEDIUM/HIGH"
+    )
     args = parser.parse_args()
 
     print("=" * 62)
@@ -215,7 +225,7 @@ def main() -> int:
     reachable, declared = check_parameters()
     if not reachable:
         return 1
-    attach_knowledge_context(inputs, args.query)
+    attach_knowledge_context(inputs, args.query, stage=args.stage, risk=args.risk)
     check_input_types(declared, inputs)
     ok = check_chat(args.query, inputs)
     print("\n" + ("全部通过" if ok else "存在问题，见上方 FAIL 行"))

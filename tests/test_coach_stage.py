@@ -142,6 +142,24 @@ def test_new_concern_revokes_action_and_allows_fallback():
     assert "继续澄清" in decision.summary_reason
 
 
+def test_new_problem_without_connector_also_revokes_action():
+    """用户直接抛出新困扰（不带"但是/不过"）时，同样要撤销行动判定。
+
+    回归用例：实测中第 1 轮由"我明天要去面试"确立了行动，
+    第 2 轮用户改说"我最近总是睡不着"，旧逻辑因为新困扰不含转折词，
+    判成"目标清楚 + 行动就绪"而立刻收束，输出一段总结收尾语——
+    用户才说了两句话，对话就被总结掉了。
+    """
+    history = _history("我明天要去参加一个特别重要的面试，一想到要面对那么多人就心慌")
+    decision = stage.decide_stage(
+        history, "我最近总是睡不着，一躺下就开始想工作上的事情", turn_index=2,
+    )
+    assert decision.action_ready is False
+    assert "action_revoked_by_new_concern" in decision.evidence
+    assert decision.should_summarize is False
+    assert decision.stage == stage.STAGE_GOAL_SETTING
+
+
 def test_window_limits_history_influence():
     """超出窗口的早期线索不再影响判定。"""
     history = _history("我希望早点定下来") + _history(

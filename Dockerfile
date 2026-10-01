@@ -16,8 +16,11 @@ COPY alembic.ini .
 COPY alembic ./alembic
 COPY app ./app
 COPY scripts ./scripts
-# 知识库检索索引：宿主机用 scripts/build_kb_index.py 生成后随镜像发布。
-# 缺失时检索会静默降级为"不带参考资料"（见 app/services/ai_lab/kb_service.py）。
+# 卡片知识库：随镜像发布。容器内首次检索时自动构建索引，无需宿主机预生成。
+# 目录缺失时检索会静默降级为"不带参考资料"（见 app/services/ai_lab/kb_cards.py）。
+COPY knowledge_base ./knowledge_base
+# 索引落盘目录（data/kb_cards_index.pkl 在容器内自动生成；
+# 挂载持久化卷可避免每次重启重建）
 COPY data ./data
 
 # 运行数据目录（挂载持久化盘）

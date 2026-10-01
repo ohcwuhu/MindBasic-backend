@@ -69,9 +69,9 @@ pip install torch torchaudio tensorflow tf-keras
 pip install -r requirements-ai.txt
 # 未安装时 ASR / 语调情感 / 文本情感 / VLM 会降级，启动日志里会逐条给出原因
 
-# 3.1 构建知识库检索索引（通话时的"参考资料"来自这里）
-python scripts/build_kb_index.py
-# 说明：索引落在 backend/data/kb_index.pkl；未构建时检索返回空，通话静默不带参考资料
+# 3.1 知识库无需任何准备步骤
+# 卡片随代码发布在 knowledge_base/，后端首次检索时自动构建索引；
+# 也不需要在 Dify 里建数据集或上传文件。
 
 # 4. 创建数据库
 mysql -uroot -p -e "CREATE DATABASE IF NOT EXISTS mindbasic DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
@@ -171,7 +171,7 @@ backend/
 │   │   │   ├── tts_service.py           # edge-tts 语音合成
 │   │   │   ├── vlm_service.py           # VLM 视觉理解（可选）
 │   │   │   ├── dify_service.py          # Dify 客户端（入参类型自适应 / 熔断）
-│   │   │   ├── kb_service.py            # 知识库检索（jieba + BM25 + DeepSeek 重排）
+│   │   │   ├── kb_cards.py              # 卡片知识库检索（jieba + BM25，按阶段与风险过滤）
 │   │   │   └── sensevoice/              # SenseVoice 远程代码
 │   │   └── …                # 业务服务（认证、预约、个案、社群、测评、邮件…）
 │   └── utils/               # 时间、格式化等工具
@@ -179,37 +179,45 @@ backend/
 │   ├── run_dev.py               # 开发启动（app.main:socket_app）
 │   ├── demo_seed.py             # 演示数据
 │   ├── cleanup_orphan_files.py  # 清扫上传孤儿文件（支持 --dry-run）
-│   ├── build_kb_index.py        # 构建知识库检索索引（本地，不调模型 API）
+│   ├── sync_kb_cards.py         # 同步卡片知识库到 knowledge_base/ 并重建索引
 │   └── check_dify.py            # Dify 接入自检（入参 / 类型 / 一轮完整对话）
-├── data/                   # 知识库索引 kb_index.pkl（构建产物，不入库）
-├── tests/                  # pytest 集成测试（39 个文件，215 项）
+├── knowledge_base/         # 卡片知识库本体（68 张卡，随代码发布）
+├── data/                   # 索引落盘目录（kb_cards_index.pkl 自动生成，不入库）
+├── tests/                  # pytest 集成测试
 ├── experiments/            # 评测脚本与标注数据（消融 / 危机分级 / 校准 / 阶段一致性）
-├── docs/                   # 模型清单与许可证、Dify 工作流改动说明、知识库检索方案与部署指南
+├── docs/                   # 模型清单与许可证、Dify 工作流改动说明、卡片知识库接入说明
 ├── requirements.txt        # 直接依赖
 ├── requirements.lock       # pip-compile 锁定
 └── requirements-ai.txt     # AI 实验室重型依赖（可选）
 ```
 
-## 知识库检索（RAG）
+## 知识库检索（卡片知识库）
 
-视频通话里「普通心理教练」用的参考资料，来自**平台侧自建的检索**，不依赖 Dify 的知识库。
-原因：账号里只有 DeepSeek（无 embedding 模型），Dify 的语义/混合检索不可用，
-经济模式的关键词检索实测也搜不出内容——连片段自身提取出的关键词都 0 命中。
-详见 [`docs/知识库检索方案.md`](docs/知识库检索方案.md)。
+视频通话里「普通心理教练」用的参考资料，来自**平台侧自建的卡片知识库**，
+**不依赖 Dify 的知识库**——不需要在 Dify 里建数据集、上传文件。
 
-实现：**jieba 分词 + BM25 召回 → DeepSeek 查询扩展与重排**，纯本地计算，零 embedding 调用。
+背景：账号里只有 DeepSeek（无 embedding 模型），Dify 的语义/混合检索不可用，
+经济模式的关键词检索实测也搜不出内容——连片段自身提取出的关键词都 0 命中，
+因此检索整体搬到平台侧。详见
+[`docs/卡片知识库接入说明.md`](docs/卡片知识库接入说明.md)。
+
+实现：**jieba 分词 + BM25**，纯本地计算，零模型调用、零 embedding 调用。
 
 | 项 | 说明 |
 | --- | --- |
-| 语料 | 15 本心理教练 / 心理学书籍（第三方出版物，**不随仓库分发**） |
-| 索引 | `data/kb_index.pkl`，6,992 片段 / 51,969 词条 / 约 17 MB |
-| 构建 | `python scripts/build_kb_index.py`，约 9 秒；书不变只需构建一次 |
-| 运行时 | ASR 后与多模态分析**并发**检索，top-4 拼成 `knowledge_context` 传给 Dify |
+| 语料 | 68 张自建卡片（一个场景 → 一个动作 → 一组话术），随代码发布于 `knowledge_base/` |
+| 索引 | `data/kb_cards_index.pkl`，471 片段 / 约 0.4 MB，**自动构建** |
+| 构建 | 无需命令；卡片文件指纹变化时自动重建。手动重建：`python scripts/sync_kb_cards.py` |
+| 过滤 | 风险硬过滤（≥MEDIUM 只放行 L0 安全卡）+ 阶段软降权（不匹配 ×0.6）+ 相关性门限 |
+| 运行时 | 索引预热与多模态分析**并发**；拿到阶段与风险后检索 top-2 拼成 `knowledge_context` |
 | 索引缺失时 | 静默降级：不报错，只是本轮不带参考资料（启动日志会给出提示） |
 
 ```bash
-# 建索引，并顺手验证一次检索
-python scripts/build_kb_index.py --query "一躺下就想工作的事，睡不着"
+# 自检检索（不套门限，看全部候选分数）
+python -m app.services.ai_lab.kb_cards query "我明天要面试，很焦虑"
+
+# 改完卡片后同步到运行时目录并重建索引
+python scripts/sync_kb_cards.py
 ```
 
 Dify 侧需要两步：开始节点声明 `knowledge_context` 变量；在「普通心理教练」的
@@ -615,12 +623,13 @@ uvicorn app.main:socket_app --host 0.0.0.0 --port 8000 --workers 1
   `CURRENT_TIMESTAMP` 写入（服务器本地时间）。做时间窗口比较时与数据库时钟对齐
   （维护任务即用 `SELECT NOW()` 作为基准），不要混用两者。
 - **AI 回复报 `[llm] Insufficient Balance`**：DeepSeek 账号余额不足，充值或更换 Key 即可，非程序问题。
-- **回复里没有书籍内容 / 知识库 0 命中**：先看启动日志有没有「知识库索引已加载」；
-  没有就跑 `python scripts/build_kb_index.py`。Docker 部署还要确认 `data/` 进了镜像或挂了卷
-  （见「知识库上传与部署指南」第六节）。单测检索用 `build_kb_index.py --query "..."`。
-- **重建索引后结果没变**：索引在进程内有缓存，**重启后端**才会重新加载。
-- **知识库要不要传到 GitHub**：不要。语料是第三方版权出版物，索引里含原文片段，
-  两者都不入库；仓库只上传构建脚本与检索实现。
+- **回复里没有卡片内容 / 知识库 0 命中**：先看启动日志有没有「卡片知识库索引已重建」，
+  再确认 `knowledge_base/` 目录存在。Docker 部署要确认镜像 COPY 了 `knowledge_base/`
+  （见 `Dockerfile`）。自检用 `python -m app.services.ai_lab.kb_cards query "..."`。
+- **重建索引后结果没变**：索引在进程内有缓存，但会按文件指纹自动重建；
+  要强制重建就 `python scripts/sync_kb_cards.py` 或重启后端。
+- **知识库要不要传到 GitHub**：卡片是本项目自建内容，可以随仓库走。
+  已下线的整本书检索索引（含第三方出版物片段）不要恢复上传。
 - **服务进程被系统杀掉**：多为内存耗尽（模型 + 系统占用超限），关闭大内存程序或增加内存后再启动。
 - **测试退出时 torch 日志报错**：已通过懒加载修复；确认 `app.main` 导入时不应加载 torch/tensorflow。
 - **时区**：应用按 UTC 存储（`utcnow_naive`），数据库服务器时间可能为本地时间；涉及跨时区比较的新逻辑请统一使用 `utcnow_naive`。

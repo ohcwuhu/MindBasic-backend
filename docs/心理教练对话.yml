@@ -1990,7 +1990,7 @@ workflow:
             - '1786523214663'
             - should_summarize_hint
           id: 'true'
-          logical_operator: or
+          logical_operator: and
         selected: false
         title: 条件分支 2
         type: if-else

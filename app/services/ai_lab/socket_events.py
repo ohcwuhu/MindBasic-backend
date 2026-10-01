@@ -763,7 +763,9 @@ def register_socket_events(sio, log):
         from app.services import ai_conversation_service as _conversation
         from app.services.coach_stage_service import decide_stage as _decide_stage
         from app.services.ai_lab import dify_service as _dify
-        from app.services.ai_lab import kb_service as _kb
+        from functools import partial as _partial
+
+        from app.services.ai_lab import kb_cards as _kb
 
         session = realtime_session.get_session(sid)
         session.state = realtime_session.STATE_THINKING
@@ -815,11 +817,11 @@ def register_socket_events(sio, log):
                     "emo": emo,
                 }, room=sid)
 
-                # 知识检索与 1.5) 多模态分析并发跑：BM25 召回 + DeepSeek 重排约 2~4s，
-                # 放在这里和多模态分析重叠，不占用关键路径。
-                # （Dify 侧的向量/关键词检索在当前账号下不可用，见 kb_service 模块说明）
+                # 知识库索引预热：进程首次调用要构建索引（约 0.8s），放在这里与
+                # 多模态分析重叠，不占用关键路径。真正的检索在下面拿到阶段与风险
+                # 等级之后再执行——卡片知识库只用本地 jieba + BM25，毫秒级。
                 _kb_future = asyncio.ensure_future(
-                    loop.run_in_executor(None, _kb.context_block_smart, asr_text)
+                    loop.run_in_executor(None, _kb.load)
                 )
 
                 # 【关键修正】ASR 完成后绝不因为"打断"而丢弃
@@ -1160,15 +1162,34 @@ def register_socket_events(sio, log):
                 _text_cn = text_result.get("emotion_cn", "") if text_result else ""
                 _text_conf = float(text_result.get("confidence", 0) or 0) if text_result else 0
 
-                # 取回上面并发执行的知识检索结果（失败不影响本轮通话）
+                # 取回索引预热结果（失败不影响本轮通话）
                 try:
-                    knowledge_context = await _kb_future
+                    await _kb_future
+                except Exception as _e:
+                    log.warning("[VC] %s | 知识库索引预热失败：%s", sid, _e)
+
+                # ── 平台侧卡片知识库检索 ──────────────────────────
+                # 用当前阶段与风险等级过滤后再注入：
+                #   风险是硬约束（>= MEDIUM 时只放行 L0 安全卡）；
+                #   阶段是软约束（不匹配降权 0.6，避免把好卡硬刷掉）。
+                # 全程本地 jieba + BM25，不调用任何模型；失败只降级为"本轮不带资料"。
+                try:
+                    knowledge_context = await loop.run_in_executor(
+                        None,
+                        _partial(
+                            _kb.context_block,
+                            asr_text,
+                            stage=_stage_decision.stage,
+                            risk=_risk.level,
+                        ),
+                    )
                 except Exception as _e:
                     log.warning("[VC] %s | 知识检索失败，本轮不带参考资料：%s", sid, _e)
                     knowledge_context = ""
                 if knowledge_context:
-                    log.info("[VC] %s | [1/5] 知识检索命中 %d 字参考资料",
-                             sid, len(knowledge_context))
+                    log.info("[VC] %s | [1/5] 知识检索命中 %d 字参考资料（阶段=%s 风险=%s）",
+                             sid, len(knowledge_context),
+                             _stage_decision.stage, _risk.level)
 
                 dify_inputs = {
                     "user_utterance": asr_text,
@@ -1189,14 +1210,21 @@ def register_socket_events(sio, log):
                     "current_stage": _stage_decision.stage,
                     "goal_clear": _stage_decision.goal_clear,
                     "action_ready": _stage_decision.action_ready,
-                    "should_summarize_hint": _stage_decision.should_summarize,
+                    # 开始节点把 should_summarize_hint 声明为 text-input（字符串），
+                    # 工作流的条件分支用 contains 'true'（小写）匹配。
+                    # 直接发 Python 布尔会被渲染成 "True"，大小写不匹配 →
+                    # 平台的收束提示永远不生效，收束完全由 Dify 侧自行决定。
+                    "should_summarize_hint": (
+                        "true" if _stage_decision.should_summarize else "false"
+                    ),
                     "platform_risk_level": _risk.level,
                     # 线索冲突信号：工作流可据此先澄清再回应
                     # （模态互相矛盾时才为 true，见 fusion_service._compute_conflict）
                     "modality_conflict": bool(_emo_ctx.get("needs_clarification")),
                     "modality_conflict_reason": _emo_ctx.get("conflict_reason", ""),
-                    # 平台侧自建检索（jieba + BM25，DeepSeek 重排）的结果，
-                    # 需在 Dify 开始节点声明同名变量并在提示词里引用，见 docs/知识库检索方案.md
+                    # 平台侧卡片知识库检索结果（本地 jieba + BM25，按阶段与风险过滤），
+                    # 需在 Dify 开始节点声明同名变量并在提示词里引用，
+                    # 见 docs/知识库检索方案.md
                     "knowledge_context": knowledge_context,
                 }
                 log.info("[VC] %s | Dify inputs: %s", sid, {
@@ -1506,6 +1534,12 @@ def register_socket_events(sio, log):
                 log.info("[VC] %s | 状态重置 -> listening", sid)
 
     # ─── vc_start: 开始视频通话会话 ─────────────────────────────
+    #: conversation_id -> 曾经承载过该通话的所有 sid。
+    #: 断线重连时新连接会加入这些"房间"，从而接住在途回复：
+    #: 若重连恰好发生在模型正在生成的那 20~30 秒里，回复是 emit 给旧 sid 的，
+    #: 不做房间别名的话这一轮会凭空消失（服务端有回复、用户什么都听不到）。
+    _conv_rooms: dict[int, set[str]] = {}
+
     @sio.on("vc_start")
     async def handle_vc_start(sid, data=None):
 
@@ -1533,6 +1567,23 @@ def register_socket_events(sio, log):
         if consent:
             session.consent_camera = bool(consent.get("camera", True))
             session.consent_multimodal = bool(consent.get("multimodal", True))
+        # 断线重连：客户端会带回合话 id，优先接回原会话。
+        # 否则一次通话会被拆成两条记录，且模型丢掉全部上下文（"教练突然失忆"）。
+        if session.conversation_id is None and payload.get("conversation_id"):
+            _resumed_id, _resumed_history = await _conversation_start.resume_session_safely(
+                conversation_id=payload.get("conversation_id"),
+                user_id=clients.get(sid, {}).get("user_id"),
+                client_session_id=sid,
+            )
+            if _resumed_id:
+                session.conversation_id = _resumed_id
+                if _resumed_history and not session.chat_history:
+                    for _m in _resumed_history:
+                        session.add_chat_message(_m["role"], _m["content"])
+                log.info(
+                    "[VC] %s | 重连接回原会话=%s，回填历史 %d 条",
+                    sid, _resumed_id, len(session.chat_history),
+                )
         if session.conversation_id is None:
             session.conversation_id = await _conversation_start.start_session_safely(
                 user_id=clients.get(sid, {}).get("user_id"),
@@ -1541,6 +1592,13 @@ def register_socket_events(sio, log):
             )
         if session.conversation_id:
             clients.setdefault(sid, {})["ai_conv_id"] = session.conversation_id
+            _cid = int(session.conversation_id)
+            _rooms = _conv_rooms.setdefault(_cid, set())
+            for _old_room in _rooms - {sid}:
+                # 加入此前承载该通话的房间，承接在途的 vc_* 事件
+                await sio.enter_room(sid, _old_room)
+                log.info("[VC] %s | 加入历史连接房间 %s（会话=%s）", sid, _old_room, _cid)
+            _rooms.add(sid)
         log.info("[VC] %s | 视频通话开始 | 会话=%s", sid, session.conversation_id)
         await sio.emit("vc_state_change", {"state": "listening"}, room=sid)
         if session.conversation_id:
@@ -1683,6 +1741,10 @@ def register_socket_events(sio, log):
     async def handle_vc_audio_chunk(sid, data):
         from app.services.ai_lab import realtime_session
         if not realtime_session.has_session(sid):
+            # 与 vc_audio_end 同理：静默丢弃会让"通话失效"完全不可观测。
+            log.warning(
+                "[VC] %s | 收到音频分片但通话会话不存在（多为断线重连），已丢弃", sid
+            )
             return
         session = realtime_session.get_session(sid)
         session.touch()  # 收到音频分片 = 用户在场，空闲计时重置
@@ -1698,10 +1760,47 @@ def register_socket_events(sio, log):
     # 音频文件已通过 HTTP POST /api/vc_audio_upload 保存到磁盘
     _VC_UPLOAD_DIR = _os.path.join(_tmp.gettempdir(), "vc_uploads")
 
+    #: 上传接口接受的音频后缀，与 app/api/v1/ai_lab.py 的 _VC_AUDIO_SUFFIXES 保持一致
+    _VC_AUDIO_EXTS = (".webm", ".webma", ".ogg", ".mp3", ".wav", ".opus")
+
+    def _drop_uploaded(file_id: str) -> None:
+        """删除已上传但不会被处理的音频。
+
+        音频由 HTTP 先落盘、再由 socket 事件触发处理。当事件被丢弃
+        （会话不存在、音频过小等）时文件就没人清理，会在临时目录里堆积。
+        """
+        if not file_id:
+            return
+        for _ext in _VC_AUDIO_EXTS:
+            _p = _os.path.join(_VC_UPLOAD_DIR, f"{file_id}{_ext}")
+            if _os.path.isfile(_p):
+                try:
+                    _os.remove(_p)
+                except OSError as _e:
+                    log.warning("[VC] 清理上传文件失败 %s：%s", _p, _e)
+                return
+
     @sio.on("vc_audio_end")
     async def handle_vc_audio_end(sid, data=None):
         from app.services.ai_lab import realtime_session
         if not realtime_session.has_session(sid):
+            # 断线重连会拿到新的 sid，而通话会话绑在旧 sid 上。
+            # 这里必须显式告知客户端补发 vc_start，否则用户会"说了话没有任何反应"：
+            # 之前是静默 return，线上表现为通话无声失效、且服务端一行日志都没有。
+            _lost_fid = ""
+            if isinstance(data, dict):
+                _lost_fid = str(data.get("file_id") or "")
+            log.warning(
+                "[VC] %s | 收到音频结束但通话会话不存在（多为断线重连），"
+                "已请求客户端重建会话", sid,
+            )
+            _drop_uploaded(_lost_fid)
+            await sio.emit("vc_error", {
+                "stage": "session",
+                "code": "SESSION_LOST",
+                "recoverable": True,
+                "message": "通话连接刚刚重连，请再说一次。",
+            }, room=sid)
             return
 
         # 如果会话已关闭（用户点了结束通话），不再处理
@@ -1752,6 +1851,7 @@ def register_socket_events(sio, log):
 
         if actual_size < 1000:
             log.warning("[VC] %s | 音频过小(%dB)，忽略", sid, actual_size)
+            _drop_uploaded(file_id)
             return
 
         # 异步执行管线，不阻塞 socket 事件循环
