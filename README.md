@@ -129,7 +129,10 @@ pytest tests -q
 | `KB_CHUNK_SIZE` / `KB_CHUNK_OVERLAP` | 否 | 建索引时的切块长度 / 重叠字数，默认 500 / 100（改后需重建索引） |
 | `KB_SOURCE_DIR` / `KB_INDEX_PATH` | 否 | 覆盖语料源目录 / 索引路径（默认位置见「知识库上传与部署指南」） |
 | `SENSEVOICE_DEVICE` | 否 | SenseVoice 设备，留空自动检测（`cuda`/`cpu`） |
-| `DEEPSEEK_BASE_URL/MODEL/TIMEOUT` | 否 | DeepSeek 覆盖项（默认 api.deepseek.com / deepseek-chat / 90s） |
+| `DEEPSEEK_BASE_URL/MODEL/TIMEOUT` | 否 | DeepSeek 覆盖项（默认 api.deepseek.com / deepseek-v4-flash / 90s） |
+| `DEEPSEEK_DISABLE_REASONING` | 否 | 是否关闭推理模式（默认 `true`）。`deepseek-v4-flash` 不关会先输出推理，语音管线首 token 变慢、正文可能被挤空 |
+| `DEEPSEEK_MAX_TOKENS` | 否 | 单轮最大生成 token（默认 500）；推理与正文共享该上限 |
+| `FALLBACK_RISK_JUDGE` | 否 | 兜底轮次是否补一次同口径风险自判（默认 `true`，写入 `fallback_risk_level`） |
 | `TTS_VOICE` / `TTS_RATE` | 否 | 视频通话语音合成（edge-tts，免费）；默认 `zh-CN-XiaoxiaoNeural` / `+20%` |
 | `VLM_API_KEY` / `VLM_BASE_URL` / `VLM_MODEL` | 否 | 视频通话视觉理解（OpenAI 兼容 Vision API）；未配置时跳过视觉理解 |
 | `CHAT_FREE_REPLY_LIMIT` | 否 | 免费沟通教练回复条数，默认 3 |
@@ -363,7 +366,7 @@ AI 心理教练对话。请求：
 }
 ```
 
-响应：`{ "reply": "...", "model": "deepseek-chat", "usage": {...} }`。
+响应：`{ "reply": "...", "model": "deepseek-v4-flash", "usage": {...} }`（model 取自 `DEEPSEEK_MODEL`）。
 上下文字段均可选，缺省时 AI 按纯文本引导。
 
 ### SocketIO 事件
@@ -459,6 +462,24 @@ AI 心理教练对话。请求：
 
 - 配了 `DIFY_API_KEY` → 每轮**先试 Dify**，同一轮内失败则**当场**改用 DeepSeek；
 - 没配 `DIFY_API_KEY` → 只用 DeepSeek（也可以在 `.env` 里注释掉 Key 来强制走 DeepSeek）。
+
+> **兜底不降档**：DeepSeek 分支与 Dify 走同一套教练方法论，并同样接收平台侧的
+> 卡片知识检索结果（`knowledge_context`）与阶段判定（`current_stage` /
+> `should_summarize_hint` 等），实现见 `app/services/ai_lab/fallback_prompt.py`。
+> 教练方法论分两档：寒暄/极短输入用精简版（`COACH_GUIDE_LITE`），其余用完整版；
+> 判定条件从严，收束轮与线索冲突轮一律用完整版。
+>
+> **风险自判的两列分工**：`dify_risk_level` 只放 Dify 工作流的判定；
+> 兜底轮次由 `risk_judge.py` 做一次**同口径**（逐条对齐 Dify「安全风险识别」节点）
+> 的非流式判定，写入 `fallback_risk_level`。两列刻意不合并——合并会让报告里
+> "平台 vs Dify"的一致性悄悄变成"平台 vs 兜底"，属于口径失真。
+> 统计接口的 `risk.consistency` 仍是严格口径，新增的 `risk.secondOpinion`
+> 才把兜底判定算作第二意见（`sources` 区分来源）。开关：`FALLBACK_RISK_JUDGE`。
+>
+> **推理模式**：`deepseek-v4-flash` 默认先输出 `reasoning_content`。实时语音管线
+> 自动带 `reasoning_effort=none` 关闭推理（`DEEPSEEK_DISABLE_REASONING`）；
+> 万一个别账号不认该参数，后端会去掉它重试一次。若日志出现
+> "模型输出了 N 字推理内容"，说明推理没关掉，首 token 会变慢、正文可能被挤空。
 
 **2）单轮回退（用户不会没回复）**
 

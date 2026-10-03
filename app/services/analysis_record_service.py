@@ -244,24 +244,31 @@ async def save_snapshot(snapshot: AnalysisSnapshot) -> bool:
         return False
 
 
-#: ``dify_risk_level`` 列长度（见 models/analysis.py）
+#: 风险等级列长度（``dify_risk_level`` / ``fallback_risk_level``，见 models/analysis.py）
 _MAX_DIFY_RISK_LENGTH = 8
 
+#: 允许补写的风险等级列白名单——列名会进入 UPDATE 语句，绝不能由外部输入拼接
+_RISK_LEVEL_COLUMNS = frozenset({"dify_risk_level", "fallback_risk_level"})
 
-async def update_dify_risk_level(
+
+async def _update_latest_risk_level(
     session_id: str,
     level: str | None,
     *,
+    column: str,
+    label: str,
     source: str = SOURCE_VIDEO_CALL,
 ) -> bool:
-    """把 Dify 工作流自判的风险等级补写到该会话最近一轮留痕上。
+    """把生成侧自判的风险等级补写到该会话最近一轮留痕上。
 
-    实时管线是"先落留痕、后拿 Dify 结束事件"，所以这里按「该会话最近一行」
+    实时管线是"先落留痕、后拿生成侧判定"，所以这里按「该会话最近一行」
     定位本轮记录（同一会话同一时刻只跑一轮管线，不存在争用）。
 
     Args:
         session_id: SocketIO sid，与留痕行的 ``session_id`` 对应。
-        level: Dify 自判等级（high/medium/low/none，大小写不限）。
+        level: 自判等级（high/medium/low/none，大小写不限）。
+        column: 目标列名，只允许 ``dify_risk_level`` / ``fallback_risk_level``。
+        label: 日志用的来源名（如 "Dify" / "兜底"）。
         source: 限定来源，避免误更新别的入口写的行。
 
     Returns:
@@ -269,6 +276,10 @@ async def update_dify_risk_level(
         返回 ``False``。本函数从不抛异常——留痕补写不得影响对话。
     """
     if not session_id:
+        return False
+    if column not in _RISK_LEVEL_COLUMNS:
+        # 防御：列名绝不能来自外部输入，避免拼出任意 UPDATE
+        _log.warning("[AnalysisRecord] 拒绝未知风险列名: %s", column)
         return False
     value = (level or "").strip().lower()[: _MAX_DIFY_RISK_LENGTH]
     if not value:
@@ -293,16 +304,45 @@ async def update_dify_risk_level(
             result = await db.execute(
                 update(MultimodalAnalysisRecord)
                 .where(MultimodalAnalysisRecord.id == target_id)
-                .values(dify_risk_level=value)
+                .values({column: value})
             )
             await db.commit()
             updated = bool(result.rowcount)
         if updated:
-            _log.info("[AnalysisRecord] 补写 Dify 风险等级 session=%s level=%s", session_id, value)
+            _log.info("[AnalysisRecord] 补写%s风险等级 session=%s level=%s",
+                      label, session_id, value)
         return updated
     except Exception as exc:  # noqa: BLE001 - 补写失败绝不能影响主流程
-        _log.warning("[AnalysisRecord] Dify 风险等级补写失败: %s", exc)
+        _log.warning("[AnalysisRecord] %s风险等级补写失败: %s", label, exc)
         return False
+
+
+async def update_dify_risk_level(
+    session_id: str,
+    level: str | None,
+    *,
+    source: str = SOURCE_VIDEO_CALL,
+) -> bool:
+    """补写 Dify 工作流自判的风险等级（主路径）。"""
+    return await _update_latest_risk_level(
+        session_id, level, column="dify_risk_level", label="Dify", source=source,
+    )
+
+
+async def update_fallback_risk_level(
+    session_id: str,
+    level: str | None,
+    *,
+    source: str = SOURCE_VIDEO_CALL,
+) -> bool:
+    """补写兜底模型自判的风险等级（Dify 不可用时的第二意见）。
+
+    与 ``update_dify_risk_level`` 写入**不同的列**，避免把两个来源混成一列：
+    否则报告里"平台 vs Dify"的一致性会悄悄变成"平台 vs 兜底"。
+    """
+    return await _update_latest_risk_level(
+        session_id, level, column="fallback_risk_level", label="兜底", source=source,
+    )
 
 
 def _optional_str(value: Any) -> str | None:
@@ -381,4 +421,5 @@ __all__ = [
     "AnalysisSnapshot",
     "save_snapshot",
     "update_dify_risk_level",
+    "update_fallback_risk_level",
 ]

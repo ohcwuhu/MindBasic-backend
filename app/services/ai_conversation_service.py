@@ -781,27 +781,30 @@ async def _generate_summary(messages: list[dict], title: str) -> str:
     import requests
 
     def _call() -> str:
-        resp = requests.post(
-            f"{_ai_config.DEEPSEEK_BASE_URL}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": _ai_config.DEEPSEEK_MODEL,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "把下面这段自我教练对话总结成一句第一人称的情绪日记（30~60字），"
-                        "直接输出总结，不要引号、不要前缀、不要解释。",
-                    },
-                    {"role": "user", "content": transcript},
-                ],
-                "temperature": 0.3,
-                "max_tokens": 160,
-            },
-            timeout=45,
-        )
+        url = f"{_ai_config.DEEPSEEK_BASE_URL}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": _ai_config.DEEPSEEK_MODEL,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "把下面这段自我教练对话总结成一句第一人称的情绪日记（30~60字），"
+                    "直接输出总结，不要引号、不要前缀、不要解释。",
+                },
+                {"role": "user", "content": transcript},
+            ],
+            "temperature": 0.3,
+            "max_tokens": 160,
+        }
+        # 160 token 的预算很小，若被推理吃掉会直接返回空摘要（回退启发式摘要）。
+        payload.update(_ai_config.deepseek_extra_params())
+        resp = requests.post(url, headers=headers, json=payload, timeout=45)
+        if resp.status_code == 400 and "reasoning_effort" in payload:
+            payload.pop("reasoning_effort", None)
+            resp = requests.post(url, headers=headers, json=payload, timeout=45)
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"].strip()
 

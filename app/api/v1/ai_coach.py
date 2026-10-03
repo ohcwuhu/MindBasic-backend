@@ -138,21 +138,27 @@ def _risk_signals(ctx: CoachContext | None) -> dict[str, Any]:
 
 def _request_completion(api_key: str, history: list[dict[str, str]]) -> requests.Response:
     """同步调用上游模型（由线程池执行，避免阻塞事件循环）。"""
-    return requests.post(
-        f"{config.DEEPSEEK_BASE_URL}/chat/completions",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "model": config.DEEPSEEK_MODEL,
-            "messages": history,
-            "temperature": 0.7,
-            "max_tokens": 600,
-            "stream": False,
-        },
-        timeout=config.DEEPSEEK_TIMEOUT,
-    )
+    url = f"{config.DEEPSEEK_BASE_URL}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload: dict[str, Any] = {
+        "model": config.DEEPSEEK_MODEL,
+        "messages": history,
+        "temperature": 0.7,
+        # 文本教练的回复比语音轮次长，沿用原有 600 上限（不受 DEEPSEEK_MAX_TOKENS 影响）
+        "max_tokens": 600,
+        "stream": False,
+    }
+    # 关闭推理：开启时正文可能被推理 token 挤空，表现为"AI 老师不回复"。
+    payload.update(config.deepseek_extra_params())
+    resp = requests.post(url, headers=headers, json=payload, timeout=config.DEEPSEEK_TIMEOUT)
+    if resp.status_code == 400 and "reasoning_effort" in payload:
+        # 账号不认该参数时去掉重试，避免整条链路直接失败
+        payload.pop("reasoning_effort", None)
+        resp = requests.post(url, headers=headers, json=payload, timeout=config.DEEPSEEK_TIMEOUT)
+    return resp
 
 
 @router.post("/chat")

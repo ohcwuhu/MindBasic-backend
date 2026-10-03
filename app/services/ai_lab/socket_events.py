@@ -171,6 +171,68 @@ async def _backfill_dify_risk(snapshot_task, session_id: str, level: str) -> Non
     await update_dify_risk_level(session_id, level)
 
 
+async def _backfill_fallback_risk(
+    loop,
+    snapshot_task,
+    session_id: str,
+    user_text: str,
+    *,
+    recent_user_lines: list[str] | None = None,
+    emotion_line: str = "",
+) -> None:
+    """兜底轮次的第二意见风险自判：判定后补写留痕。
+
+    放在主流程之外的三个理由：
+
+    1. 判定要发一次额外的 LLM 请求，绝不能拖慢用户这一轮的首 token；
+    2. 与 ``_backfill_dify_risk`` 同构——都要等留痕落库后再 UPDATE，
+       否则会补写到上一轮的行上；
+    3. 失败只是没有第二意见，不影响任何用户可见行为（内部已吞掉异常）。
+    """
+    from app.services.analysis_record_service import update_fallback_risk_level
+    from app.services.ai_lab import risk_judge
+
+    if not risk_judge.is_enabled():
+        return
+    level, reason = await loop.run_in_executor(
+        None,
+        lambda: risk_judge.judge_risk(
+            user_text,
+            recent_user_lines=recent_user_lines,
+            emotion_line=emotion_line,
+        ),
+    )
+    if not level:
+        return
+    log.info("[VC] %s | 兜底自判风险等级: %s（%s），补写本轮留痕",
+             session_id, level, reason or "无依据说明")
+    if snapshot_task is not None:
+        try:
+            await asyncio.shield(snapshot_task)
+        except Exception:  # noqa: BLE001 - 留痕失败不影响主流程
+            return
+    await update_fallback_risk_level(session_id, level)
+
+
+async def _warm_dify_input_types() -> None:
+    """后台预热 Dify 入参声明缓存（``GET /parameters``）。
+
+    这是管线里唯一需要联网拿的配置，缓存 300s 过期。通话开始到第一轮回复之间
+    通常有几秒（用户在说话 + ASR 处理），足够这次往返跑完，于是第一轮不必再等它
+    ——实测云端往返 1.7~6.8s，直接加在首字延迟上。
+
+    ``fetch_input_types`` 自己吞掉异常并回退到旧缓存，所以这里不需要再兜一层；
+    真失败也只是没预热到，不影响任何用户可见行为。
+    """
+    from app.services.ai_lab import dify_service
+
+    if not dify_service.is_enabled():
+        return
+    await asyncio.get_running_loop().run_in_executor(
+        None, dify_service.fetch_input_types
+    )
+
+
 def decode_base64_frame(img_base64: str):
     """
     解码 base64 画面帧为 OpenCV BGR 图像。
@@ -305,6 +367,9 @@ async def _consume_llm_stream(sio, log, resp, *, is_dify: bool, sid: str, sessio
     full_response = ""
     sentence_buffer = ""
     token_count = 0
+    # 推理模式残留计数：正常关闭推理时为 0。若某个模型仍输出 reasoning_content，
+    # 这些内容不朗读、不展示，但必须留痕——否则"回复变慢/变空"会被误判成网络问题。
+    reasoning_chars = 0
     first_token_t: float | None = None
     first_tts_t: float | None = None
     error: str | None = None
@@ -372,6 +437,10 @@ async def _consume_llm_stream(sio, log, resp, *, is_dify: bool, sid: str, sessio
             else:
                 delta = chunk_data.get("choices", [{}])[0].get("delta", {})
                 token = delta.get("content", "")
+                # 推理模型的思考过程：只计数，绝不进入正文（正文会被 TTS 朗读）
+                _reasoning = delta.get("reasoning_content")
+                if _reasoning:
+                    reasoning_chars += len(str(_reasoning))
                 if not token:
                     continue
             token_count += 1
@@ -448,6 +517,13 @@ async def _consume_llm_stream(sio, log, resp, *, is_dify: bool, sid: str, sessio
 
     log.info("[VC] %s | [4/5] SSE 解析完成, full_response 长度=%d, token_count=%d",
              sid, len(full_response), token_count)
+    if reasoning_chars:
+        log.warning(
+            "[VC] %s | 模型输出了 %d 字推理内容（已丢弃，不入正文/不朗读）。"
+            "说明推理模式未关闭：首 token 会变慢，且正文可能被推理 token 挤空——"
+            "检查 DEEPSEEK_DISABLE_REASONING 与 max_tokens。",
+            sid, reasoning_chars,
+        )
     return {
         "full_response": full_response,
         "sentence_buffer": sentence_buffer,
@@ -767,6 +843,8 @@ def register_socket_events(sio, log):
 
         from app.services.ai_lab import kb_cards as _kb
 
+        from app.services.ai_lab import fallback_prompt as _fallback
+
         session = realtime_session.get_session(sid)
         session.state = realtime_session.STATE_THINKING
         await sio.emit("vc_state_change", {"state": "thinking"}, room=sid)
@@ -796,45 +874,12 @@ def register_socket_events(sio, log):
                          sid, len(_api_key), _cfg.DEEPSEEK_BASE_URL, _cfg.DEEPSEEK_MODEL, _cfg.DEEPSEEK_TIMEOUT)
 
             try:
-                # ── 1) SenseVoice ASR ──────────────────────────────
-                log.info("[VC] %s | [1/5] 开始 ASR 识别...", sid)
                 loop = asyncio.get_event_loop()
-                _asr_t0 = _time.time()
-                asr_result = await loop.run_in_executor(None, _sv.transcribe, audio_path)
-                _asr_seconds = round(_time.time() - _asr_t0, 3)
-                asr_text = asr_result.get("text", "").strip()
-                emo = asr_result.get("emo", "neutral")
 
-                if not asr_text:
-                    log.info("[VC] %s | ASR 无结果，跳过", sid)
-                    session.state = realtime_session.STATE_LISTENING
-                    await sio.emit("vc_state_change", {"state": "listening"}, room=sid)
-                    return
-
-                log.info("[VC] %s | [1/5] ASR 完成: %s (emo=%s)", sid, asr_text[:80], emo)
-                await sio.emit("vc_asr_result", {
-                    "text": asr_text,
-                    "emo": emo,
-                }, room=sid)
-
-                # 知识库索引预热：进程首次调用要构建索引（约 0.8s），放在这里与
-                # 多模态分析重叠，不占用关键路径。真正的检索在下面拿到阶段与风险
-                # 等级之后再执行——卡片知识库只用本地 jieba + BM25，毫秒级。
-                _kb_future = asyncio.ensure_future(
-                    loop.run_in_executor(None, _kb.load)
-                )
-
-                # 【关键修正】ASR 完成后绝不因为"打断"而丢弃
-                #   vc_interrupt 的唯一语义 = 停止后续 TTS 语音播放
-                #   ASR / 情感分析 / LLM 文本生成 必须完整执行，保证用户看到文字回复
-                #   TTS 合成时才会尊重 llm_cancelled 跳过语音合成
-
-                # ── 1.5) 多模态情感分析（语调+文本+面部融合）─────────
-                log.info("[VC] %s | [1.5/5] 开始多模态情感分析...", sid)
-                import time as _time_mm
-                _mm_t0 = _time_mm.time()
-
-                # 并发：语调情感(emotion2vec) + 文本情感(text_emotion)
+                # ── 情感分析函数：提前定义，好在 ASR 期间就把语调分析并行启动 ──
+                # 语调情感只读音频文件（与 ASR 读的是同一个 audio_path），没有任何
+                # 数据依赖；只有文本情感需要 ASR 文本。放在这里定义，纯粹是为了让
+                # 下面能在 await ASR 之前把语调分析丢进线程池。
                 def _run_voice_emotion():
                     """语调情感分析，emotion2vec 优先，失败降级 opensmile。"""
                     try:
@@ -878,13 +923,74 @@ def register_socket_events(sio, log):
                             return None
 
                 def _run_text_emotion():
-                    """文本情感分析。"""
+                    """文本情感分析（依赖 ASR 文本，故读取闭包里的 asr_text）。"""
                     try:
                         return _te.analyze(asr_text)
                     except Exception as e:
                         log.warning("[VC] %s | text_emotion 失败: %s", sid, e)
                         return None
 
+                # ── 1) SenseVoice ASR ──────────────────────────────
+                log.info("[VC] %s | [1/5] 开始 ASR 识别...", sid)
+                _asr_t0 = _time.time()
+
+                # 【延迟优化】语调情感与 ASR 并行启动。两者都是重模型（CPU 上会争抢
+                # 核心，所以收益不是"完全省掉"，但重叠仍能实打实缩短关键路径）。
+                # 未授权多模态时不做语调分析，与下方分支的判断保持一致。
+                _voice_future = (
+                    loop.run_in_executor(None, _run_voice_emotion)
+                    if session.consent_multimodal else None
+                )
+
+                asr_result = await loop.run_in_executor(None, _sv.transcribe, audio_path)
+                _asr_seconds = round(_time.time() - _asr_t0, 3)
+                asr_text = asr_result.get("text", "").strip()
+                emo = asr_result.get("emo", "neutral")
+
+                if not asr_text:
+                    log.info("[VC] %s | ASR 无结果，跳过", sid)
+                    session.state = realtime_session.STATE_LISTENING
+                    await sio.emit("vc_state_change", {"state": "listening"}, room=sid)
+                    return
+
+                log.info("[VC] %s | [1/5] ASR 完成: %s (emo=%s)", sid, asr_text[:80], emo)
+                await sio.emit("vc_asr_result", {
+                    "text": asr_text,
+                    "emo": emo,
+                }, room=sid)
+
+                # 知识库索引预热：进程首次调用要构建索引（约 0.8s），放在这里与
+                # 多模态分析重叠，不占用关键路径。真正的检索在下面拿到阶段与风险
+                # 等级之后再执行——卡片知识库只用本地 jieba + BM25，毫秒级。
+                _kb_future = asyncio.ensure_future(
+                    loop.run_in_executor(None, _kb.load)
+                )
+
+                # VLM 视觉理解提前启动：它依赖 ASR 文本，但不依赖情感分析结果。
+                # 原先它串行排在多模态之后，一触发就把整段耗时加到关键路径上；
+                # 放在这里与多模态分析并行，结果在下面第 2 步再取。
+                _vlm_future = None
+                if _is_visual_query(asr_text):
+                    _vlm_frame = session.get_valid_frame()
+                    if _vlm_frame is not None and _vlm.is_available():
+                        log.info("[VC] %s | [2/5] VLM 与本轮多模态分析并行启动", sid)
+                        _vlm_future = loop.run_in_executor(
+                            None, _vlm.analyze_frame, _vlm_frame, asr_text,
+                            session.get_chat_history(),
+                        )
+
+                # 【关键修正】ASR 完成后绝不因为"打断"而丢弃
+                #   vc_interrupt 的唯一语义 = 停止后续 TTS 语音播放
+                #   ASR / 情感分析 / LLM 文本生成 必须完整执行，保证用户看到文字回复
+                #   TTS 合成时才会尊重 llm_cancelled 跳过语音合成
+
+                # ── 1.5) 多模态情感分析（语调+文本+面部融合）─────────
+                log.info("[VC] %s | [1.5/5] 开始多模态情感分析...", sid)
+                import time as _time_mm
+                _mm_t0 = _time_mm.time()
+
+                # 说明：两个分析函数已在 ASR 之前定义（见上方），以便语调情感能与
+                # ASR 并行。这里只负责取结果。
                 if not session.consent_multimodal:
                     # 用户未授权多模态分析：跳过语调分析，只保留文本情感。
                     # 授权范围见 vc_start 写入的 consent 快照与 consent_records 表。
@@ -892,9 +998,10 @@ def register_socket_events(sio, log):
                     voice_result = None
                     text_result = await loop.run_in_executor(None, _run_text_emotion)
                 else:
-                    # 并发执行两个情感分析
+                    # 语调情感在 ASR 期间就已经在跑了（_voice_future），这里 await 通常
+                    # 立刻返回；文本情感依赖 ASR 文本，只能从这一刻开始，与它并行等待。
                     voice_result, text_result = await asyncio.gather(
-                        loop.run_in_executor(None, _run_voice_emotion),
+                        _voice_future,
                         loop.run_in_executor(None, _run_text_emotion),
                     )
 
@@ -1083,15 +1190,11 @@ def register_socket_events(sio, log):
                 #   打断仅影响 TTS 播放，不影响 LLM 文本生成推进
 
                 # ── 2) VLM 视觉理解（可选）──────────────────────────
-                log.info("[VC] %s | [2/5] 检查 VLM... (is_visual=%s, has_frame=%s, vlm_avail=%s)",
-                         sid, _is_visual_query(asr_text), session.get_valid_frame() is not None, _vlm.is_available())
                 visual_context = ""
-                frame = session.get_valid_frame()
-                if _is_visual_query(asr_text) and frame and _vlm.is_available():
-                    log.info("[VC] %s | [2/5] 触发 VLM 视觉理解", sid)
-                    vlm_result = await loop.run_in_executor(
-                        None, _vlm.analyze_frame, frame, asr_text, session.get_chat_history()
-                    )
+                if _vlm_future is not None:
+                    # 早在多模态分析开始时已经并行触发，这里只为取结果
+                    log.info("[VC] %s | [2/5] 等待 VLM 结果（已并行执行）", sid)
+                    vlm_result = await _vlm_future
                     if vlm_result.get("description"):
                         visual_context = vlm_result["description"]
                         session.last_visual_description = visual_context
@@ -1104,7 +1207,9 @@ def register_socket_events(sio, log):
                         log.warning("[VC] %s | [2/5] VLM 返回空描述, err=%s",
                                     sid, vlm_result.get("error"))
                 else:
-                    log.info("[VC] %s | [2/5] 跳过 VLM", sid)
+                    log.info("[VC] %s | [2/5] 跳过 VLM (is_visual=%s, has_frame=%s, vlm_avail=%s)",
+                             sid, _is_visual_query(asr_text),
+                             session.get_valid_frame() is not None, _vlm.is_available())
 
                 # 【关键修正】VLM 完成后绝不因为"打断"而丢弃
                 #   打断仅影响 TTS 播放，不影响 LLM 文本生成推进
@@ -1112,8 +1217,21 @@ def register_socket_events(sio, log):
                 # ── 3) 构造 LLM 请求 ───────────────────────────────
                 session.add_chat_message("user", asr_text)
 
+                # 注意：history 只喂给 DeepSeek 兜底分支——Dify 走的是 dify_inputs +
+                # sys.query，不读 history（见下方 _call_llm_stream）。所以这里可以放心
+                # 把"Dify 侧靠提示词与开始节点变量实现的东西"补齐，不会与工作流重复。
                 history: list[dict[str, str]] = [
-                    {"role": "system", "content": _VC_SYSTEM_PROMPT}
+                    {"role": "system", "content": _VC_SYSTEM_PROMPT},
+                    # 教练方法论：与 Dify「普通心理教练」节点同源，避免兜底时掉档。
+                    # 寒暄/极短输入用精简版——那类轮次用不上完整方法论，而且多发生在
+                    # 通话最开始（提示词缓存尚未建立），省下的是真实的实时延迟。
+                    {"role": "system", "content": _fallback.guide_for(
+                        asr_text,
+                        should_summarize=_stage_decision.should_summarize,
+                        modality_conflict=bool(
+                            session.emotion_context.get("needs_clarification")
+                        ),
+                    )},
                 ]
 
                 # 情绪上下文（多模态融合结果）
@@ -1143,15 +1261,9 @@ def register_socket_events(sio, log):
                         "content": f"摄像头画面内容描述（VLM识别）：{visual_context}"
                     })
 
-                # 危机场景：注入安全处置指令（优先级高于风格要求）
-                if session.emotion_context.get("risk_level") in (
-                    _crisis.LEVEL_MEDIUM, _crisis.LEVEL_HIGH,
-                ):
-                    history.append({"role": "system", "content": _CRISIS_SYSTEM_DIRECTIVE})
-
-                # 对话历史
-                history.extend(session.get_chat_history()[-12:])
-                log.info("[VC] %s | [3/5] LLM 请求构造完成, history=%d 条", sid, len(history))
+                # 危机处置指令与对话历史都不在这里拼：前者要保持在所有上下文之后
+                # （越靠后越有约束力），后者要保证「上下文在前、真实对话在后」。
+                # 两者的追加位置见下方 3.5 节。
 
                 # Dify 智能体入参（对应 chatflow start 节点变量：多模态情绪上下文）
                 _emo_ctx = session.emotion_context
@@ -1190,6 +1302,34 @@ def register_socket_events(sio, log):
                     log.info("[VC] %s | [1/5] 知识检索命中 %d 字参考资料（阶段=%s 风险=%s）",
                              sid, len(knowledge_context),
                              _stage_decision.stage, _risk.level)
+
+                # ── 3.5) 兜底分支上下文补齐（只影响 DeepSeek 直连路径）──────
+                # 过去 knowledge_context 与阶段判定只作为 Dify 的入参，
+                # DeepSeek 分支拿不到，表现为「Dify 正常时像教练、一触发兜底就
+                # 退回通用助手」。这里把它们拼进 history，使两条路径的回答依据一致。
+                # 详见 app/services/ai_lab/fallback_prompt.py。
+                history.extend(_fallback.build_context_messages(
+                    stage=_stage_decision.stage,
+                    goal_clear=_stage_decision.goal_clear,
+                    action_ready=_stage_decision.action_ready,
+                    should_summarize=_stage_decision.should_summarize,
+                    summary_reason=_stage_decision.summary_reason,
+                    knowledge_context=knowledge_context,
+                    modality_conflict=bool(_emo_ctx.get("needs_clarification")),
+                    modality_conflict_reason=str(_emo_ctx.get("conflict_reason") or ""),
+                ))
+
+                # 危机场景：注入安全处置指令。放在所有上下文之后，保证它是模型看到的
+                # 最后一条规则（优先级最高，见 _CRISIS_SYSTEM_DIRECTIVE 的自述）。
+                if session.emotion_context.get("risk_level") in (
+                    _crisis.LEVEL_MEDIUM, _crisis.LEVEL_HIGH,
+                ):
+                    history.append({"role": "system", "content": _CRISIS_SYSTEM_DIRECTIVE})
+
+                # 对话历史放最后：当前轮用户表达已在 get_chat_history() 末尾
+                history.extend(session.get_chat_history()[-12:])
+                log.info("[VC] %s | [3/5] LLM 请求构造完成, history=%d 条（含兜底上下文）",
+                         sid, len(history))
 
                 dify_inputs = {
                     "user_utterance": asr_text,
@@ -1238,7 +1378,14 @@ def register_socket_events(sio, log):
                 # 只在真的要走 Dify 时查：DeepSeek 分支用不到 inputs，
                 # 每次都查一次 /parameters 会在 Dify 网络慢时白等最多 DIFY_TIMEOUT 秒。
                 if use_dify:
-                    dify_inputs = _dify.normalize_inputs(dify_inputs)
+                    # normalize_inputs 内部是同步 requests.get（GET /parameters），
+                    # 必须放进线程池执行：否则在缓存过期的那一轮，整个事件循环会被
+                    # 冻结到请求返回为止——实测云端往返 1.7~6.8s，期间所有连接
+                    # （不只是当前这通电话）全部卡住。其余耗时操作都用了 executor，
+                    # 这里原先漏了。
+                    dify_inputs = await loop.run_in_executor(
+                        None, _dify.normalize_inputs, dify_inputs
+                    )
 
                 # ── 4) LLM 流式输出 + TTS 联动 ─────────────────────
                 session.state = realtime_session.STATE_SPEAKING
@@ -1286,22 +1433,48 @@ def register_socket_events(sio, log):
                                 return resp
                             log.info("[VC] %s | DeepSeek HTTP POST -> %s/chat/completions | model=%s (attempt %d/%d)",
                                      sid, _cfg.DEEPSEEK_BASE_URL, _cfg.DEEPSEEK_MODEL, _attempt, _cfg.LLM_RETRIES)
+                            _ds_payload: dict = {
+                                "model": _cfg.DEEPSEEK_MODEL,
+                                "messages": history,
+                                "temperature": 0.7,
+                                "max_tokens": _cfg.DEEPSEEK_MAX_TOKENS,
+                                "stream": True,
+                            }
+                            # 关闭推理：详见 ai_lab/config.py 里 DEEPSEEK_DISABLE_REASONING 的说明。
+                            # 不关的话，语音管线会先静默等推理，且正文可能被推理 token 挤空。
+                            if _cfg.DEEPSEEK_DISABLE_REASONING:
+                                _ds_payload["reasoning_effort"] = "none"
                             resp = _requests.post(
                                 f"{_cfg.DEEPSEEK_BASE_URL}/chat/completions",
                                 headers={
                                     "Authorization": f"Bearer {provider_key}",
                                     "Content-Type": "application/json",
                                 },
-                                json={
-                                    "model": _cfg.DEEPSEEK_MODEL,
-                                    "messages": history,
-                                    "temperature": 0.7,
-                                    "max_tokens": 500,
-                                    "stream": True,
-                                },
+                                json=_ds_payload,
                                 timeout=_cfg.DEEPSEEK_TIMEOUT,
                                 stream=True,
                             )
+                            # 防御：个别账号/模型版本不认 reasoning_effort 会返回 400。
+                            # 这种情况去掉该参数重发一次，而不是让整轮对话失败。
+                            if (
+                                resp.status_code == 400
+                                and "reasoning_effort" in _ds_payload
+                            ):
+                                log.warning(
+                                    "[VC] %s | DeepSeek 拒绝 reasoning_effort，去掉该参数重试",
+                                    sid,
+                                )
+                                _ds_payload.pop("reasoning_effort", None)
+                                resp = _requests.post(
+                                    f"{_cfg.DEEPSEEK_BASE_URL}/chat/completions",
+                                    headers={
+                                        "Authorization": f"Bearer {provider_key}",
+                                        "Content-Type": "application/json",
+                                    },
+                                    json=_ds_payload,
+                                    timeout=_cfg.DEEPSEEK_TIMEOUT,
+                                    stream=True,
+                                )
                             log.info("[VC] %s | DeepSeek HTTP 响应: status=%s", sid, resp.status_code)
                             return resp
                         except Exception as _e:
@@ -1433,6 +1606,35 @@ def register_socket_events(sio, log):
                         _backfill_dify_risk(_snapshot_task, sid, _dify_risk_level),
                         name=f"dify-risk:{sid}",
                     )
+                elif (
+                    full_response.strip()
+                    and not _llm_is_dify
+                    and _cfg.FALLBACK_RISK_JUDGE
+                ):
+                    # 本轮是兜底模型产出的：Dify 那边没有判定可写，就补一次同口径的
+                    # 第二意见，否则"主路径抖了几轮"会直接从一致性统计里消失。
+                    # 后台任务执行，不占用户这一轮的响应时间；详见 risk_judge 模块。
+                    _recent_user_lines = [
+                        str(_m.get("content") or "")
+                        for _m in session.get_chat_history()[:-1]
+                        if _m.get("role") == "user"
+                    ][-3:]
+                    _emotion_line = "；".join(
+                        _p for _p in (
+                            f"融合情绪：{session.emotion_context.get('fusion_emotion')}"
+                            if session.emotion_context.get("fusion_emotion") else "",
+                            f"面部表情：{session.emotion_context.get('live_level')}"
+                            if session.emotion_context.get("live_level") else "",
+                        ) if _p
+                    )
+                    spawn_task(
+                        _backfill_fallback_risk(
+                            loop, _snapshot_task, sid, asr_text,
+                            recent_user_lines=_recent_user_lines,
+                            emotion_line=_emotion_line,
+                        ),
+                        name=f"fallback-risk:{sid}",
+                    )
 
                 if not full_response.strip():
                     # 只有"完全没生成内容"才报错（真·空回复才是配置问题）
@@ -1549,6 +1751,9 @@ def register_socket_events(sio, log):
         session = realtime_session.get_session(sid)
         session.state = realtime_session.STATE_LISTENING
         session.touch()  # 通话开始即视为一次语音活动，空闲计时重新起算
+
+        # Dify 入参声明后台预热：把这次联网挪出第一轮的关键路径（见函数注释）。
+        spawn_task(_warm_dify_input_types(), name=f"dify-warm:{sid}")
 
         # 开会话 + 写授权存证（尽力而为：失败只记日志，不影响通话）
         payload = data if isinstance(data, dict) else {}

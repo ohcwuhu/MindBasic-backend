@@ -141,3 +141,34 @@ def test_broken_json_line_is_skipped(monkeypatch):
     ]
     outcome, _sio, _synth = _consume(lines, is_dify=False, monkeypatch=monkeypatch)
     assert outcome["full_response"] == "继续"
+
+
+def test_deepseek_reasoning_content_is_never_spoken(monkeypatch):
+    """推理模型的思考过程必须丢弃：它既不能进正文，更不能被 TTS 朗读。
+
+    背景：deepseek-v4-flash 默认先吐 reasoning_content。若把推理混进正文，
+    用户会听到模型的内心独白；若把它当正文计数，首 token 延迟也会被算错。
+    """
+    lines = [
+        _sse({"choices": [{"delta": {"reasoning_content": "用户在问好，"}}]}),
+        _sse({"choices": [{"delta": {"reasoning_content": "我该回一句问候。"}}]}),
+        _sse({"choices": [{"delta": {"content": "你好"}}]}),
+        _sse({"choices": [{"delta": {"content": "，我在。"}}]}),
+        "data: [DONE]",
+    ]
+    outcome, sio, synthesized = _consume(lines, is_dify=False, monkeypatch=monkeypatch)
+
+    assert outcome["full_response"] == "你好，我在。"
+    assert "用户" not in outcome["full_response"], "推理内容混进了正文"
+    assert outcome["token_count"] == 2, "推理分片不应计入 token 数"
+    assert all("用户" not in text for text, _v, _r in synthesized), "推理内容被朗读了"
+
+
+def test_deepseek_pure_reasoning_round_yields_empty(monkeypatch):
+    """整轮只有推理、没有正文时判为"无产出"，交由上层降级——不能当成有效回复。"""
+    lines = [
+        _sse({"choices": [{"delta": {"reasoning_content": "想了很久"}}]}),
+        "data: [DONE]",
+    ]
+    outcome, _sio, _synth = _consume(lines, is_dify=False, monkeypatch=monkeypatch)
+    assert outcome["full_response"] == ""

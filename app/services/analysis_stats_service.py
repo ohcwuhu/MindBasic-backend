@@ -68,6 +68,7 @@ class AnalysisRow:
     timings: dict[str, Any] | None = None
     risk_level: str | None = None
     dify_risk_level: str | None = None
+    fallback_risk_level: str | None = None
     coach_stage: str | None = None
 
 
@@ -106,6 +107,7 @@ def aggregate_rows(rows: Sequence[AnalysisRow], *, total: int | None = None) -> 
     stage_counts: dict[str, int] = {}
     risk_counts: dict[str, int] = {}
     dify_risk_counts: dict[str, int] = {}
+    fallback_risk_counts: dict[str, int] = {}
     adjustment_counts: dict[str, int] = {}
     latencies: dict[str, list[float]] = {key: [] for key in LATENCY_KEYS}
 
@@ -117,6 +119,11 @@ def aggregate_rows(rows: Sequence[AnalysisRow], *, total: int | None = None) -> 
     matched = 0
     platform_flagged = 0
     dify_flagged = 0
+    fallback_flagged = 0
+    comparable_any = 0
+    matched_any = 0
+    second_opinion_dify = 0
+    second_opinion_fallback = 0
 
     for row in rows:
         status = str(row.status or "unknown")
@@ -156,6 +163,28 @@ def aggregate_rows(rows: Sequence[AnalysisRow], *, total: int | None = None) -> 
             comparable += 1
             if platform_level == dify_level:
                 matched += 1
+
+        fallback_level = normalize_dify_risk(row.fallback_risk_level)
+        if fallback_level:
+            fallback_risk_counts[fallback_level] = (
+                fallback_risk_counts.get(fallback_level, 0) + 1
+            )
+            if fallback_level in _FLAGGED_LEVELS:
+                fallback_flagged += 1
+
+        # 第二意见口径：Dify 判定优先，缺失时用兜底判定补齐。
+        # 这是给"主路径抖动导致样本缩水"兜底的覆盖率指标，
+        # 与上面严格的 dify 一致性分开报告，避免两种口径互相污染。
+        second_level = dify_level or fallback_level
+        if second_level:
+            if dify_level:
+                second_opinion_dify += 1
+            else:
+                second_opinion_fallback += 1
+            if platform_level:
+                comparable_any += 1
+                if platform_level == second_level:
+                    matched_any += 1
 
         timings = row.timings or {}
         for key in LATENCY_KEYS:
@@ -212,10 +241,26 @@ def aggregate_rows(rows: Sequence[AnalysisRow], *, total: int | None = None) -> 
                 "flagged": dify_flagged,
                 "flaggedRate": _rate(dify_flagged),
             },
+            "fallback": {
+                "distribution": fallback_risk_counts,
+                "flagged": fallback_flagged,
+                "flaggedRate": _rate(fallback_flagged),
+            },
             "consistency": {
                 "comparable": comparable,
                 "matched": matched,
                 "rate": round(matched / comparable, 4) if comparable else None,
+            },
+            # 第二意见覆盖率：Dify 判定优先、兜底判定补位。
+            # 用来回答"主路径不可用的那几轮有没有被统计丢掉"。
+            "secondOpinion": {
+                "sources": {
+                    "dify": second_opinion_dify,
+                    "fallback": second_opinion_fallback,
+                },
+                "comparable": comparable_any,
+                "matched": matched_any,
+                "rate": round(matched_any / comparable_any, 4) if comparable_any else None,
             },
         },
         "stages": {
@@ -256,6 +301,7 @@ async def multimodal_overview(
             MultimodalAnalysisRecord.timings,
             MultimodalAnalysisRecord.risk_level,
             MultimodalAnalysisRecord.dify_risk_level,
+            MultimodalAnalysisRecord.fallback_risk_level,
             MultimodalAnalysisRecord.coach_stage,
         )
         .where(*filters)
@@ -273,7 +319,8 @@ async def multimodal_overview(
             timings=row[5],
             risk_level=row[6],
             dify_risk_level=row[7],
-            coach_stage=row[8],
+            fallback_risk_level=row[8],
+            coach_stage=row[9],
         )
         for row in detail_rows
     ]

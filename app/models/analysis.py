@@ -62,6 +62,14 @@ class MultimodalAnalysisRecord(Base):
         nullable=True,
         comment="Dify 工作流自判的风险等级（high/medium/low），用于两侧一致性统计",
     )
+    fallback_risk_level = Column(
+        String(8),
+        nullable=True,
+        comment=(
+            "兜底模型自判的风险等级（low/medium/high）：Dify 不可用时的第二意见，"
+            "与 dify_risk_level 分列存放以免口径混用"
+        ),
+    )
 
     coach_stage = Column(
         String(24),
