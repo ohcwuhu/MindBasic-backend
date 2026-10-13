@@ -19,6 +19,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -313,6 +314,38 @@ _KEY_METRICS_SPEC = [
 # ============================================================
 #  内部工具
 # ============================================================
+def _ascii_config_root() -> str:
+    """返回 openSMILE 可用的配置目录（必须为 ASCII 路径）。
+
+    openSMILE 的 C 接口在初始化时用 ``bytes(str(v), "ascii")`` 传递配置路径，
+    因此当安装目录包含非 ASCII 字符（例如项目位于中文路径下）时会抛
+    ``UnicodeEncodeError``。此时把 ``opensmile/core/config`` 镜像到
+    ``%LOCALAPPDATA%/MindBasic/opensmile-config/<版本>`` 再使用。
+    """
+    from opensmile.core import smile as _smile_mod
+
+    pkg_root = os.path.join(
+        os.path.dirname(os.path.realpath(_smile_mod.__file__)), "config"
+    )
+    try:
+        pkg_root.encode("ascii")
+        return pkg_root
+    except UnicodeEncodeError:
+        pass  # 安装路径含中文，需要改用 ASCII 镜像
+
+    import opensmile
+
+    base = os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()
+    mirror = os.path.join(
+        base, "MindBasic", "opensmile-config", getattr(opensmile, "__version__", "unknown")
+    )
+    if not os.path.isdir(mirror):
+        os.makedirs(os.path.dirname(mirror), exist_ok=True)
+        shutil.copytree(pkg_root, mirror)
+        _log.info("[OpenSMILE] 配置目录已镜像到 ASCII 路径: %s", mirror)
+    return mirror
+
+
 def _load_once():
     """懒加载 EmotionAnalyzer。"""
     global _analyzer, _loaded, _load_error
@@ -327,6 +360,11 @@ def _load_once():
         _log.info("[OpenSMILE] 开始加载 EmotionAnalyzer + eGeMAPSv02...")
         try:
             import opensmile  # 延迟导入，避免后端启动即初始化
+            from opensmile.core import smile as _smile_mod
+
+            # 安装路径含非 ASCII 字符时，CONFIG_ROOT 用绝对 ASCII 路径覆盖
+            # （os.path.join 遇到绝对路径会直接返回它，属性计算无需改动）
+            _smile_mod.config.CONFIG_ROOT = _ascii_config_root()
             t0 = time.time()
             _analyzer = EmotionAnalyzer(
                 feature_set=opensmile.FeatureSet.eGeMAPSv02,

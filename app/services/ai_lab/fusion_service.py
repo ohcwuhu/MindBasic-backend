@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from datetime import datetime
 from typing import Any, Mapping
 
@@ -44,9 +45,25 @@ EMOTION_CN = {
 }
 
 # 基础权重（经验值）
-_BASE_W_TEXT = 0.40    # 语义内容是情感最直接的载体
-_BASE_W_VOICE = 0.35   # 韵律承载情感意图，但受说话风格影响
-_BASE_W_FACIAL = 0.25  # 视觉是补充信号，受遮挡/光线影响
+#
+# 面部基础权重由 0.25 下调到 0.15（可用 FACIAL_WEIGHT_BASE 覆盖，范围 0~0.50）。
+# 依据：真实通话留痕中，面部只有「中性/恐惧」两种输出（29 轮里中性 25 轮），
+# 且把"我今天非常的高兴"判成恐惧（0.44）、问句判成恐惧（0.87）；加权平均是线性
+# 叠加，86% 的中性输出会持续把融合结果往中性拉，高权重下更会直接误导结论。
+# 取值依据 experiments/data/fusion_samples.jsonl 实测（40 样本、线上动态权重）：
+#   0.25 → 准确率 0.975 / 宏F1 0.9712（基线）
+#   0.20 → 0.975 / 0.9712
+#   0.15 → 0.975 / 0.9712   ← 无损的最低值
+#   0.10 → 0.950 / 0.9576（S32 由 neutral 误判为 sad，故不取）
+# 注意：该评测集的面部标签是理想值，无法反映"真实场景面部 86% 输出中性"的偏置，
+# 真实收益（减少中性稀释与错误恐惧票）比评测集体现的更大。
+# 腾出的权重按原 text:voice = 0.40:0.35 等比例回补，三者仍归一化到 1.0。
+_FACIAL_WEIGHT_BASE = float(os.environ.get("FACIAL_WEIGHT_BASE", "0.15") or 0.15)
+_FACIAL_WEIGHT_BASE = min(max(_FACIAL_WEIGHT_BASE, 0.0), 0.50)
+_REMAIN_W = 1.0 - _FACIAL_WEIGHT_BASE
+_BASE_W_TEXT = _REMAIN_W * (0.40 / 0.75)   # 语义内容是情感最直接的载体
+_BASE_W_VOICE = _REMAIN_W * (0.35 / 0.75)  # 韵律承载情感意图，但受说话风格影响
+_BASE_W_FACIAL = _FACIAL_WEIGHT_BASE       # 视觉是补充信号，受遮挡/光线影响
 
 # 面部时序下采样的最大关键点数
 _MAX_SEQUENCE_POINTS = 10
@@ -496,8 +513,9 @@ def _compute_dynamic_weights(
     if len(text_str) < 5:
         reduction = w_text * 0.5
         w_text -= reduction
-        w_voice += reduction * 0.7
-        w_facial += reduction * 0.3
+        # 削掉的权重只回补给另一路可靠模态，不再回补面部：否则短句轮次会把面部
+        # 权重抬回接近原值（实测 0.15 → 0.245），抵消压低头部权重的策略。
+        w_voice += reduction
         adjustments.append(f"text_too_short({len(text_str)}chars): text-50%")
 
     # 规则4: SenseVoice emo 与 emotion2vec+ 一致（且非 neutral）
@@ -515,8 +533,7 @@ def _compute_dynamic_weights(
     if voice_conf < 0.4:
         reduction = w_voice * 0.30
         w_voice -= reduction
-        w_text += reduction * 0.6
-        w_facial += reduction * 0.4
+        w_text += reduction  # 同上：统一不给面部回补
         adjustments.append(f"voice_confidence_low({voice_conf:.2f}): voice-30%")
 
     # 规则6: 文本置信度过低
@@ -524,8 +541,7 @@ def _compute_dynamic_weights(
     if text_conf < 0.3:
         reduction = w_text * 0.30
         w_text -= reduction
-        w_voice += reduction * 0.6
-        w_facial += reduction * 0.4
+        w_voice += reduction  # 同上：统一不给面部回补
         adjustments.append(f"text_confidence_low({text_conf:.2f}): text-30%")
 
     # 归一化（防止浮点累积误差 + 确保权重非负）

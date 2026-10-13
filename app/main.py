@@ -1,7 +1,17 @@
+import sys
 import time
 import uuid
 import threading
 from contextlib import asynccontextmanager
+
+# Windows 控制台与重定向默认使用 GBK：第三方库在导入期打印非 GBK 字符时
+# （例如 deepface 的 ⚠️ 弃用警告）会抛 UnicodeEncodeError 并中断导入，
+# 导致实时表情识别不可用。这里统一把标准流切到 UTF-8。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:  # 非文本流（如部分测试环境）时忽略
+        pass
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -52,12 +62,41 @@ logger = get_logger("mindbasic")
 access_logger = get_logger("mindbasic.access")
 
 
+def _warmup_deepface() -> None:
+    """触发 DeepFace / TensorFlow 首次加载（约 30-80s，一次性）。
+
+    面部表情此前没有预热：第一帧到达时才现场加载 TensorFlow + MTCNN + 表情权重，
+    实测要 80 秒左右，期间上传的面部帧全部排队、融合时按时间窗口取不到数据
+    （留痕里的 ``facial_frames=0``、权重调整 ``no_facial_frames`` 多半来自这里）。
+    启动时后台跑一次即可让通话第一帧就正常出结果。
+    """
+    import numpy as np
+    from deepface import DeepFace
+
+    # enforce_detection=False：无脸图也能跑完整前向，达到预热目的
+    dummy = np.full((160, 160, 3), 127, dtype="uint8")
+    DeepFace.analyze(
+        dummy,
+        actions=["emotion"],
+        enforce_detection=False,
+        silent=True,
+        detector_backend="mtcnn",
+    )
+
+
 def _background_warmup() -> None:
-    """后台预热 AI 模型（SenseVoice + emotion2vec + 文本情感 + OpenSMILE + TTS + VLM）。"""
+    """后台预热 AI 模型（SenseVoice + emotion2vec + 文本情感 + OpenSMILE + DeepFace + TTS + VLM）。"""
     try:
         from app.api.v1.ai_lab import _SV, _EV, _TE, _OS
 
         logger.info("[WARMUP] 开始后台预热 AI 实验室全部模型 ...")
+
+        # DeepFace 单独起线程并行预热：它是单项最重的（首次加载 TensorFlow +
+        # MTCNN + 表情权重，实测约 80s）。若串行排在其它模型之后，用户此时开始通话
+        # 就会和预热互相抢 CPU——实测 SenseVoice 加载从 20s 拖到 114s，且通话最初
+        # 几分钟的面部帧全部排队、融合取不到数据（facial_frames=0）。
+        threading.Thread(target=_warmup_deepface_safely, daemon=True).start()
+
         for name, svc in [
             ("sensevoice", _SV),
             ("emotion2vec", _EV),
@@ -80,6 +119,18 @@ def _background_warmup() -> None:
         logger.info("[WARMUP] 后台预热完成")
     except Exception as e:  # noqa: BLE001
         logger.warning("[WARMUP] 预热流程异常: %s", e)
+
+
+def _warmup_deepface_safely() -> None:
+    """DeepFace 预热线程入口：失败只记日志，不影响其它预热。"""
+    try:
+        import time as _t
+
+        t0 = _t.time()
+        _warmup_deepface()
+        logger.info("[WARMUP] deepface 预热完成（耗时 %.1fs）", _t.time() - t0)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[WARMUP] deepface 预热失败: %s", e)
 
 
 @asynccontextmanager
