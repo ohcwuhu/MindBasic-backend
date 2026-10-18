@@ -86,8 +86,8 @@ FALLBACK_RISK_JUDGE: bool = os.environ.get(
 ).strip().lower() not in {"0", "false", "no", "off", ""}
 
 # TTS 语音合成（edge-tts，免费无需 API Key）
-TTS_VOICE: str = os.environ.get("TTS_VOICE", "zh-CN-XiaoxiaoNeural")
-TTS_RATE: str = os.environ.get("TTS_RATE", "+20%")
+TTS_VOICE: str = settings.tts_voice
+TTS_RATE: str = settings.tts_rate
 
 # VLM 视觉理解（OpenAI 兼容 Vision API，可选）
 # 未配置时视频通话跳过视觉理解，不影响其他功能

@@ -119,6 +119,13 @@ async def create_appointment(
     data: AppointmentCreateIn,
     idempotency_key: str | None,
 ) -> tuple[Appointment, bool]:
+    if idempotency_key:
+        existing = await db.scalar(select(Appointment).where(
+            Appointment.user_id == user.id, Appointment.idempotency_key == idempotency_key,
+        ))
+        if existing is not None:
+            return existing, False
+
     coach = await db.scalar(
         select(CoachProfile).where(
             CoachProfile.id == data.coach_id,
@@ -144,7 +151,7 @@ async def create_appointment(
     slot = await db.get(CoachSlot, data.slot_id)
     if slot is None or slot.coach_id != coach.id:
         raise AppError(409, "SLOT_UNAVAILABLE", "所选时段不可用")
-    if slot.date < date_type.today():
+    if _slot_start(slot) <= datetime.now():
         raise AppError(409, "SLOT_UNAVAILABLE", "所选时段已过期")
 
     result = await db.execute(
@@ -155,42 +162,42 @@ async def create_appointment(
     if result.rowcount == 0:
         raise AppError(409, "SLOT_UNAVAILABLE", "所选时段已被预约")
 
-    appointment = Appointment(
-        appointment_no=generate_appointment_no(),
-        user_id=user.id,
-        coach_id=coach.id,
-        service_id=service.id,
-        slot_id=slot.id,
-        need_desc=data.need_desc.strip(),
-        status="PENDING",
-        cancel_deadline_at=_cancel_deadline(slot),
-        idempotency_key=idempotency_key,
-    )
-    db.add(appointment)
-    await db.flush()
-    order = Order(
-        order_no=generate_order_no(),
-        type="APPOINTMENT",
-        user_id=user.id,
-        coach_id=coach.id,
-        service_id=service.id,
-        appointment_id=appointment.id,
-        amount_in_cents=service.price_in_cents,
-        status="CREATED",
-        expire_at=order_pay_expire_at(),
-    )
-    db.add(order)
-    await db.flush()
-    appointment.order_id = order.id
-    await _record_event(db, appointment.id, user.id, "USER", "BOOKED", "创建预约")
-    await notify(
-        db,
-        coach.user_id,
-        "APPOINTMENT",
-        "收到新预约",
-        f"{user.nickname}提交了新预约（待支付），请在用户完成支付后确认。",
-    )
     try:
+        appointment = Appointment(
+            appointment_no=generate_appointment_no(),
+            user_id=user.id,
+            coach_id=coach.id,
+            service_id=service.id,
+            slot_id=slot.id,
+            need_desc=data.need_desc.strip(),
+            status="PENDING",
+            cancel_deadline_at=_cancel_deadline(slot),
+            idempotency_key=idempotency_key,
+        )
+        db.add(appointment)
+        await db.flush()
+        order = Order(
+            order_no=generate_order_no(),
+            type="APPOINTMENT",
+            user_id=user.id,
+            coach_id=coach.id,
+            service_id=service.id,
+            appointment_id=appointment.id,
+            amount_in_cents=service.price_in_cents,
+            status="CREATED",
+            expire_at=order_pay_expire_at(),
+        )
+        db.add(order)
+        await db.flush()
+        appointment.order_id = order.id
+        await _record_event(db, appointment.id, user.id, "USER", "BOOKED", "创建预约")
+        await notify(
+            db,
+            coach.user_id,
+            "APPOINTMENT",
+            "收到新预约",
+            f"{user.nickname}提交了新预约（待支付），请在用户完成支付后确认。",
+        )
         await db.commit()
     except IntegrityError:
         await db.rollback()
@@ -666,7 +673,7 @@ async def reschedule_appointment(
     new_slot = await db.get(CoachSlot, new_slot_id)
     if new_slot is None or new_slot.coach_id != coach.id:
         raise AppError(409, "SLOT_UNAVAILABLE", "所选时段不可用")
-    if new_slot.date < date_type.today():
+    if _slot_start(new_slot) <= datetime.now():
         raise AppError(409, "SLOT_UNAVAILABLE", "所选时段已过期")
     result = await db.execute(
         update(CoachSlot)

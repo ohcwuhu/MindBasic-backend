@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from: str = ""
     email_code_ttl_minutes: int = 10
+    tts_voice: str = "zh-CN-XiaoxiaoNeural"
+    tts_rate: str = "+0%"
     # AI 实验室：DeepSeek 心理教练
     deepseek_api_key: str = ""
     # AI 实验室：Dify 智能体（视频通话 LLM，可选；配置后优先使用）

@@ -172,3 +172,54 @@ def test_deepseek_pure_reasoning_round_yields_empty(monkeypatch):
     ]
     outcome, _sio, _synth = _consume(lines, is_dify=False, monkeypatch=monkeypatch)
     assert outcome["full_response"] == ""
+
+
+def test_slow_tts_does_not_block_text_tokens(monkeypatch):
+    async def run():
+        text_finished = asyncio.Event()
+        sio = _FakeSio()
+        emit = sio.emit
+        async def observed(event, data=None, **kwargs):
+            await emit(event, data, **kwargs)
+            if event == "vc_llm_token" and data["token"] == "最后一句":
+                text_finished.set()
+        sio.emit = observed
+        async def slow_synthesize(text, **kwargs):
+            # 旧实现会等语音才能继续读最后一个 token，形成等待并超时。
+            await asyncio.wait_for(text_finished.wait(), timeout=2)
+            yield b"audio"
+        monkeypatch.setattr(tts_service, "synthesize", slow_synthesize)
+        resp = _FakeResp([_sse({"choices": [{"delta": {"content": t}}]})
+                          for t in ["第一句。", "第二句。", "最后一句"]])
+        result = await socket_events._consume_llm_stream(sio, _log, resp,
+            is_dify=False, sid="test", session=_session())
+        assert result["full_response"] == "第一句。第二句。最后一句"
+        assert not [event for event, _ in sio.events if event == "vc_error"]
+        assert [data["text"] for event, data in sio.events if event == "vc_tts_done"] == ["第一句。", "第二句。"]
+    asyncio.run(run())
+
+
+def test_interrupt_drops_remaining_audio_but_keeps_text(monkeypatch):
+    async def run():
+        session = _session()
+        sio = _FakeSio()
+        async def interrupted(text, **kwargs):
+            session.llm_cancelled = True
+            yield b"should-not-play"
+        monkeypatch.setattr(tts_service, "synthesize", interrupted)
+        resp = _FakeResp([_sse({"choices": [{"delta": {"content": t}}]})
+                          for t in ["第一句。", "第二句。", "最后一句"]])
+        result = await socket_events._consume_llm_stream(sio, _log, resp,
+            is_dify=False, sid="test", session=session)
+        assert result["full_response"] == "第一句。第二句。最后一句"
+        assert not [event for event, _ in sio.events if event in ("vc_tts_chunk", "vc_tts_done")]
+    asyncio.run(run())
+
+
+def test_tts_settings_read_dotenv(tmp_path):
+    from app.core.config import Settings
+    path = tmp_path / ".env"
+    path.write_text("TTS_RATE=-5%\nTTS_VOICE=zh-CN-YunxiNeural\n", encoding="utf-8")
+    config = Settings(_env_file=path)
+    assert config.tts_rate == "-5%"
+    assert config.tts_voice == "zh-CN-YunxiNeural"

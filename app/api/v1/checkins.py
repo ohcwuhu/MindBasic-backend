@@ -75,6 +75,28 @@ async def my_checkins_endpoint(
     return ok({"items": items}, trace_id=request.state.trace_id)
 
 
+@router.get("/action")
+async def latest_action_adjustment(
+    request: Request,
+    journalId: int = Query(ge=1),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+) -> dict:
+    from sqlalchemy import select
+    from app.models.growth import CheckIn
+    from app.services.emotion_journal_service import get_own_journal_or_404
+
+    await get_own_journal_or_404(db, user.id, journalId)
+    suffix = f"（来源日记：{journalId}）"
+    content = await db.scalar(select(CheckIn.content).where(
+        CheckIn.user_id == user.id,
+        CheckIn.content.startswith("行动调小："),
+        CheckIn.content.endswith(suffix),
+    ).order_by(CheckIn.check_date.desc()).limit(1))
+    action = content[len("行动调小："):-len(suffix)] if content else None
+    return ok({"action": action}, trace_id=request.state.trace_id)
+
+
 @router.get("/leaderboard")
 async def leaderboard_endpoint(
     request: Request,

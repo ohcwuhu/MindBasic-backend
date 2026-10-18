@@ -174,33 +174,29 @@ async def replace_coach_slots(db: AsyncSession, coach_profile_id: int, data: Slo
         parsed.append((d, start, end))
 
     dates = {d for d, _, _ in parsed}
-    await db.execute(
-        CoachSlot.__table__.delete().where(
-            CoachSlot.coach_id == coach_profile_id,
-            CoachSlot.date.in_(dates),
-            CoachSlot.status != "BOOKED",
-        )
-    )
-    booked_keys = {
-        (row.date, row.start_time)
-        for row in await db.scalars(
-            select(CoachSlot).where(
-                CoachSlot.coach_id == coach_profile_id,
-                CoachSlot.date.in_(dates),
-                CoachSlot.status == "BOOKED",
-            )
-        )
-    }
-    for d, start, end in parsed:
-        if (d, start) in booked_keys:
-            continue
-        db.add(CoachSlot(
-            coach_id=coach_profile_id,
-            date=d,
-            start_time=start,
-            end_time=end,
-            status="AVAILABLE",
-        ))
+    booked = list(await db.scalars(select(CoachSlot).where(
+        CoachSlot.coach_id == coach_profile_id,
+        CoachSlot.date.in_(dates), CoachSlot.status == "BOOKED",
+    )))
+    booked_keys = {(row.date, row.start_time) for row in booked}
+    for row in booked:
+        for d, start, end in parsed:
+            if d == row.date and start == row.start_time and end != row.end_time:
+                raise AppError(409, "SLOT_CONFLICT", "不能修改已预约时段")
+    additions = [(d, start, end) for d, start, end in parsed if (d, start) not in booked_keys]
+    intervals = [(row.date, row.start_time, row.end_time) for row in booked]
+    for d, start, end in additions:
+        if any(d == day and start < other_end and end > other_start
+               for day, other_start, other_end in intervals):
+            raise AppError(409, "SLOT_CONFLICT", "时段与其他可约或已预约时段重叠")
+        intervals.append((d, start, end))
+    await db.execute(CoachSlot.__table__.delete().where(
+        CoachSlot.coach_id == coach_profile_id,
+        CoachSlot.date.in_(dates), CoachSlot.status != "BOOKED",
+    ))
+    for d, start, end in additions:
+        db.add(CoachSlot(coach_id=coach_profile_id, date=d,
+                         start_time=start, end_time=end, status="AVAILABLE"))
     await db.commit()
     return await list_coach_slots(
         db, coach_profile_id, min(dates).isoformat(), max(dates).isoformat()

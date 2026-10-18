@@ -1,7 +1,7 @@
 """公开教练目录：列表、详情、可预约时段。"""
 
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import select
@@ -174,6 +174,7 @@ async def coach_slots(coach_id: int, request: Request, db: AsyncSession = Depend
             "status": s.status,
         }
         for s in slots
+        if datetime.combine(s.date, s.start_time) > datetime.now()
     ]
     return ok({"items": items}, trace_id=request.state.trace_id)
 

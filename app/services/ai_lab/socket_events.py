@@ -379,141 +379,146 @@ async def _consume_llm_stream(sio, log, resp, *, is_dify: bool, sid: str, sessio
     line_count = 0
     resp_t0 = _jtime.time()
 
-    for line in resp.iter_lines(decode_unicode=True):
-        line_count += 1
-        # 【关键修正】SSE 流处理中即使收到打断，也继续解析（full_response 要完整）
-        #   只在需要触发 TTS 合成时，才根据 llm_cancelled 跳过语音
-        if not line:
-            continue
-        if not line.startswith("data: "):
-            # SSE 中非 data 行（如空行/注释），忽略
-            continue
-        data_str = line[6:]
-        if data_str.strip() == "[DONE]":
-            log.info("[VC] %s | SSE 收到 [DONE], 共 %d 行, %d tokens",
-                     sid, line_count, token_count)
-            break
-        try:
-            chunk_data = _json.loads(data_str)
-            if is_dify:
-                # 工作流自判风险等级（可能出现在 workflow_finished 的 outputs
-                # 或 message_end 的 metadata 里），取到即留痕，供两侧一致性统计
-                _found_risk = _extract_dify_risk(chunk_data)
-                if _found_risk:
-                    dify_risk_level = _found_risk
-                event = chunk_data.get("event", "")
-                if event == "message_end":
-                    _cid = chunk_data.get("conversation_id")
-                    if _cid:
-                        session.dify_conversation_id = _cid
-                    log.info("[VC] %s | Dify message_end | conversation_id=%s",
-                             sid, session.dify_conversation_id)
-                    # message_end 之后通常还有 workflow_finished（携带结束节点
-                    # 输出变量，例如工作流自判的 risk_level），继续读到流结束，
-                    # 否则拿不到工作流的输出，两侧一致性永远为空。
-                    # 最多再等 20 个事件，避免异常服务端不回结束事件时卡住。
-                    dify_saw_message_end = True
-                    continue
-                if dify_saw_message_end:
-                    dify_post_end_events += 1
-                    if dify_post_end_events > 20:
-                        log.warning(
-                            "[VC] %s | message_end 后仍未收到 workflow_finished，提前结束解析", sid,
-                        )
+    import asyncio
+
+    speech_queue = asyncio.Queue()
+
+    async def response_lines():
+        # requests 的同步网络读取放在线程中，避免阻塞语音任务与打断事件。
+        lines = iter(resp.iter_lines(decode_unicode=True))
+        while True:
+            line = await asyncio.to_thread(next, lines, None)
+            if line is None:
+                return
+            yield line
+
+    async def speak_sentences():
+        nonlocal first_tts_t
+        while True:
+            text = await speech_queue.get()
+            if text is None:
+                return
+            if session.llm_cancelled:
+                continue
+            await sio.emit("vc_tts_start", {"text": text}, room=sid)
+            try:
+                async for audio_chunk in _tts.synthesize(text, voice=_cfg.TTS_VOICE, rate=_cfg.TTS_RATE):
+                    if session.llm_cancelled:
                         break
-                if event == "workflow_finished":
-                    log.info("[VC] %s | Dify workflow_finished | risk=%s",
-                             sid, dify_risk_level or "(未暴露)")
-                    break
-                if event == "error":
-                    error = chunk_data.get("message") or "Dify 智能体错误"
-                    log.error("[VC] %s | Dify 错误事件: %s", sid, error)
-                    break
-                if event not in ("message", "agent_message"):
-                    continue
-                token = chunk_data.get("answer") or ""
-                if not token:
-                    continue
-            else:
-                delta = chunk_data.get("choices", [{}])[0].get("delta", {})
-                token = delta.get("content", "")
-                # 推理模型的思考过程：只计数，绝不进入正文（正文会被 TTS 朗读）
-                _reasoning = delta.get("reasoning_content")
-                if _reasoning:
-                    reasoning_chars += len(str(_reasoning))
-                if not token:
-                    continue
-            token_count += 1
-            full_response += token
-            sentence_buffer += token
-
-            # 推送 token 到前端
-            await sio.emit("vc_llm_token", {"token": token}, room=sid)
-
-            # 记录首 token 时间（量化延迟用）
-            if first_token_t is None:
-                first_token_t = _jtime.time()
-                log.info("[VC] %s | [4/5] 首 token 到达（距离 HTTP 响应 %.1fs）",
-                         sid, first_token_t - resp_t0)
-
-            # 检查句子边界 → 触发 TTS
-            sentences = _split_sentences(sentence_buffer)
-            force_tts = False
-            force_text = ""
-            if len(sentences) > 1:
-                # 前面的完整句子送 TTS
-                force_tts = True
-                force_text = sentences[0]
-                sentence_buffer = "".join(sentences[1:])
-            elif len(sentence_buffer) >= _MAX_SENTENCE_LEN:
-                # 强制分句：没标点但超过 160 字也切
-                force_tts = True
-                force_text = sentence_buffer[:_MAX_SENTENCE_LEN]
-                sentence_buffer = sentence_buffer[_MAX_SENTENCE_LEN:]
-
-            if force_tts and force_text.strip() and not session.llm_cancelled:
-                if first_tts_t is None:
-                    first_tts_t = _jtime.time()
-                    log.info("[VC] %s | [4/5] 首次触发 TTS（首 token → 首个声音输出 %.1fs）",
-                             sid, first_tts_t - first_token_t)
-                log.info("[VC] %s | [4/5] %s分句 TTS: %s",
-                         sid, "强制" if len(sentences) <= 1 else "标点", force_text[:40])
-
-                await sio.emit("vc_tts_start", {"text": force_text}, room=sid)
-                try:
-                    tts_chunk_idx = 0
-                    tts_was_cancelled_during = False
-                    async for audio_chunk in _tts.synthesize(
-                        force_text, voice=_cfg.TTS_VOICE, rate=_cfg.TTS_RATE
-                    ):
-                        # 关键修改：TTS 合成过程中即使被打断，也继续把当前句的音频发完
-                        # 这样用户能完整听到这一句话，而不是只播放一半
-                        if session.llm_cancelled:
-                            tts_was_cancelled_during = True
-                        tts_chunk_idx += 1
-                        audio_b64 = _b64.b64encode(audio_chunk).decode("ascii")
-                        await sio.emit("vc_tts_chunk", {
-                            "data": audio_b64,
-                            "format": "mp3",
-                        }, room=sid)
-                    if tts_was_cancelled_during:
-                        log.info("[VC] %s | [4/5] TTS 句完成（期间被打断，已完整合成 %d 个分片，后续只收文字不再TTS）", sid, tts_chunk_idx)
-                    else:
-                        log.info("[VC] %s | [4/5] TTS 句完成: %d 个分片", sid, tts_chunk_idx)
-                    await sio.emit("vc_tts_done", {"text": force_text}, room=sid)
-                    # 【关键修正】即使被打断也不退出 SSE 循环！
-                    #   vc_interrupt 的唯一语义 = 停止后续 TTS 语音播放
-                    #   LLM 文字生成必须完整解析到底，保证用户能看到完整文字回复
-                    #   后续句子会因为 session.llm_cancelled=True 而自动跳过 TTS
-                    #   绝不能 break，否则 full_response 就残缺了！
-                except Exception as e:
-                    log.warning("[VC] %s | TTS 分句失败: %s", sid, e, exc_info=True)
-                    await sio.emit("vc_error", {
-                        "stage": "tts", "message": str(e)
+                    if first_tts_t is None:
+                        first_tts_t = _jtime.time()
+                    await sio.emit("vc_tts_chunk", {
+                        "data": _b64.b64encode(audio_chunk).decode("ascii"), "format": "mp3",
                     }, room=sid)
+                if not session.llm_cancelled:
+                    await sio.emit("vc_tts_done", {"text": text}, room=sid)
+            except Exception as exc:
+                log.warning("[VC] %s | TTS 分句失败: %s", sid, exc, exc_info=True)
+                await sio.emit("vc_error", {"stage": "tts", "message": str(exc)}, room=sid)
 
-        except _json.JSONDecodeError:
-            continue
+    async with asyncio.TaskGroup() as tasks:
+        tasks.create_task(speak_sentences())
+        try:
+            async for line in response_lines():
+                line_count += 1
+                # 【关键修正】SSE 流处理中即使收到打断，也继续解析（full_response 要完整）
+                #   只在需要触发 TTS 合成时，才根据 llm_cancelled 跳过语音
+                if not line:
+                    continue
+                if not line.startswith("data: "):
+                    # SSE 中非 data 行（如空行/注释），忽略
+                    continue
+                data_str = line[6:]
+                if data_str.strip() == "[DONE]":
+                    log.info("[VC] %s | SSE 收到 [DONE], 共 %d 行, %d tokens",
+                             sid, line_count, token_count)
+                    break
+                try:
+                    chunk_data = _json.loads(data_str)
+                    if is_dify:
+                        # 工作流自判风险等级（可能出现在 workflow_finished 的 outputs
+                        # 或 message_end 的 metadata 里），取到即留痕，供两侧一致性统计
+                        _found_risk = _extract_dify_risk(chunk_data)
+                        if _found_risk:
+                            dify_risk_level = _found_risk
+                        event = chunk_data.get("event", "")
+                        if event == "message_end":
+                            _cid = chunk_data.get("conversation_id")
+                            if _cid:
+                                session.dify_conversation_id = _cid
+                            log.info("[VC] %s | Dify message_end | conversation_id=%s",
+                                     sid, session.dify_conversation_id)
+                            # message_end 之后通常还有 workflow_finished（携带结束节点
+                            # 输出变量，例如工作流自判的 risk_level），继续读到流结束，
+                            # 否则拿不到工作流的输出，两侧一致性永远为空。
+                            # 最多再等 20 个事件，避免异常服务端不回结束事件时卡住。
+                            dify_saw_message_end = True
+                            continue
+                        if dify_saw_message_end:
+                            dify_post_end_events += 1
+                            if dify_post_end_events > 20:
+                                log.warning(
+                                    "[VC] %s | message_end 后仍未收到 workflow_finished，提前结束解析", sid,
+                                )
+                                break
+                        if event == "workflow_finished":
+                            log.info("[VC] %s | Dify workflow_finished | risk=%s",
+                                     sid, dify_risk_level or "(未暴露)")
+                            break
+                        if event == "error":
+                            error = chunk_data.get("message") or "Dify 智能体错误"
+                            log.error("[VC] %s | Dify 错误事件: %s", sid, error)
+                            break
+                        if event not in ("message", "agent_message"):
+                            continue
+                        token = chunk_data.get("answer") or ""
+                        if not token:
+                            continue
+                    else:
+                        delta = chunk_data.get("choices", [{}])[0].get("delta", {})
+                        token = delta.get("content", "")
+                        # 推理模型的思考过程：只计数，绝不进入正文（正文会被 TTS 朗读）
+                        _reasoning = delta.get("reasoning_content")
+                        if _reasoning:
+                            reasoning_chars += len(str(_reasoning))
+                        if not token:
+                            continue
+                    token_count += 1
+                    full_response += token
+                    sentence_buffer += token
+
+                    # 推送 token 到前端
+                    await sio.emit("vc_llm_token", {"token": token}, room=sid)
+
+                    # 记录首 token 时间（量化延迟用）
+                    if first_token_t is None:
+                        first_token_t = _jtime.time()
+                        log.info("[VC] %s | [4/5] 首 token 到达（距离 HTTP 响应 %.1fs）",
+                                 sid, first_token_t - resp_t0)
+
+                    # 检查句子边界 → 触发 TTS
+                    sentences = _split_sentences(sentence_buffer)
+                    force_tts = False
+                    force_text = ""
+                    if len(sentences) > 1 or sentence_buffer.rstrip().endswith(("。", "！", "？", "!", "?", "\n")):
+                        # 前面的完整句子送 TTS
+                        force_tts = True
+                        force_text = sentences[0]
+                        sentence_buffer = "".join(sentences[1:])
+                    elif len(sentence_buffer) >= _MAX_SENTENCE_LEN:
+                        # 强制分句：没标点但超过 160 字也切
+                        force_tts = True
+                        force_text = sentence_buffer[:_MAX_SENTENCE_LEN]
+                        sentence_buffer = sentence_buffer[_MAX_SENTENCE_LEN:]
+
+                    if force_tts and force_text.strip() and not session.llm_cancelled:
+                        speech_queue.put_nowait(force_text)
+
+                except _json.JSONDecodeError:
+                    continue
+
+        finally:
+            speech_queue.put_nowait(None)
 
     log.info("[VC] %s | [4/5] SSE 解析完成, full_response 长度=%d, token_count=%d",
              sid, len(full_response), token_count)
@@ -1578,6 +1583,8 @@ def register_socket_events(sio, log):
                             async for audio_chunk in _tts.synthesize(
                                 tts_text, voice=_cfg.TTS_VOICE, rate=_cfg.TTS_RATE
                             ):
+                                if session.llm_cancelled:
+                                    break
                                 audio_b64 = _b64.b64encode(audio_chunk).decode("ascii")
                                 await sio.emit("vc_tts_chunk", {
                                     "data": audio_b64,

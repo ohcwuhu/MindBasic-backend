@@ -1,5 +1,10 @@
 # MindBasic 后端服务
 
+本地语音配置：`TTS_VOICE` 与 `TTS_RATE` 从 `.env` 统一读取，默认语速为 `+0%`，修改后需重启后端。文字流与按句语音合成并行运行，打断只停止本轮语音，保留完整文字。
+
+语音流回归测试（使用模拟模型和音频，不连接数据库）：`python -m pytest --noconftest tests/test_llm_stream_consume.py -q`。
+
+
 心理教练成长服务平台（MindBasic）的 FastAPI 后端。为响应式 Web 前端提供 REST API，
 覆盖用户端自助工具、教练端工作台、管理后台，以及内嵌的 **AI 实验室**（实时表情识别、
 多模态情绪分析、DeepSeek AI 心理教练）。
