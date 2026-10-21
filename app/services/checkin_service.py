@@ -8,11 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import AppError
 from app.models.growth import Badge, CheckIn, UserBadge
 from app.models.user import User
-from app.utils.time import to_iso
+from app.utils.time import business_today, to_iso
 
 
 async def check_in(db: AsyncSession, user: User, content: str | None) -> tuple[CheckIn, list[Badge]]:
-    today = date.today()
+    today = business_today()
     if await db.scalar(select(CheckIn.id).where(CheckIn.user_id == user.id, CheckIn.check_date == today)):
         raise AppError(409, "CONFLICT", "今天已经打过卡了")
     record = CheckIn(user_id=user.id, check_date=today, content=content)
@@ -25,12 +25,19 @@ async def check_in(db: AsyncSession, user: User, content: str | None) -> tuple[C
 
 
 async def streak_days(db: AsyncSession, user_id: int, end: date) -> int:
-    streak = 0
-    day = end
-    while await db.scalar(select(CheckIn.id).where(CheckIn.user_id == user_id, CheckIn.check_date == day)):
-        streak += 1
-        day -= timedelta(days=1)
-    return streak
+    days = list(
+        await db.scalars(
+            select(CheckIn.check_date)
+            .where(CheckIn.user_id == user_id, CheckIn.check_date <= end)
+            .order_by(CheckIn.check_date.desc())
+        )
+    )
+    expected = end
+    for day in days:
+        if day != expected:
+            break
+        expected -= timedelta(days=1)
+    return (end - expected).days
 
 
 async def award_badges(db: AsyncSession, user_id: int, today: date) -> list[Badge]:
@@ -108,7 +115,7 @@ async def my_badges(db: AsyncSession, user_id: int) -> list[dict]:
 
 
 async def leaderboard(db: AsyncSession, period: str) -> list[dict]:
-    today = date.today()
+    today = business_today()
     start = today - timedelta(days=6) if period == "week" else today.replace(day=1)
     rows = (
         await db.execute(
@@ -125,7 +132,7 @@ async def leaderboard(db: AsyncSession, period: str) -> list[dict]:
 
 
 async def my_stats(db: AsyncSession, user_id: int) -> dict:
-    today = date.today()
+    today = business_today()
     total = await db.scalar(select(func.count()).select_from(CheckIn).where(CheckIn.user_id == user_id)) or 0
     month_start = today.replace(day=1)
     month_count = (

@@ -100,6 +100,8 @@ class VideoCallSession:
     last_activity_at: float = field(default_factory=time.time)
     # 空闲超时是否已经通知过前端（避免重复 emit / 重复归档）
     idle_timeout_notified: bool = False
+    # 是否已进入收尾；在途管线仍持有该对象，但同一 sid 的新通话应创建新对象
+    closing: bool = False
 
     def touch(self) -> None:
         """标记一次语音活动：重置空闲计时，允许下一次超时再次触发。"""
@@ -191,7 +193,7 @@ def get_session(sid: str) -> VideoCallSession:
     return _sessions[sid]
 
 
-def remove_session(sid: str) -> None:
+def remove_session(sid: str, expected: VideoCallSession | None = None) -> None:
     """从会话表移除该 sid（不就地清空对象）。
 
     这里刻意不调用 ``clear()``：实时管线在 ``_run_video_call_pipeline_from_file``
@@ -201,6 +203,11 @@ def remove_session(sid: str) -> None:
 
     只摘掉字典引用即可：管线跑完后对象自然被回收，下一通电话会拿到新对象。
     """
+    current = _sessions.get(sid)
+    if current is None:
+        return
+    if expected is not None and current is not expected:
+        return
     _sessions.pop(sid, None)
 
 

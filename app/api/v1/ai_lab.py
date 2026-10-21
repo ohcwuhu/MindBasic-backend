@@ -48,6 +48,7 @@ from app.services.ai_lab import text_emotion_service
 from app.services.ai_lab import opensmile_service       # 后备：emotion2vec+ 加载失败时降级
 from app.services.ai_lab import fusion_service
 from app.services.ai_lab import facial_buffer
+from app.services.ai_lab import upload_store
 
 _SV = sensevoice_service
 _EV = emotion2vec_service
@@ -406,13 +407,12 @@ async def warmup(
 # ================================================================
 import uuid
 
-_VC_UPLOAD_DIR = os.path.join(tempfile.gettempdir(), "vc_uploads")
-os.makedirs(_VC_UPLOAD_DIR, exist_ok=True)
+_VC_UPLOAD_DIR = str(upload_store.UPLOAD_DIR)
 
 #: 单段录音上限：实时通话一轮最长 60s，webm/opus 下 20MB 已相当宽裕
 _VC_AUDIO_MAX_BYTES = 20 * 1024 * 1024
 #: 允许的音频后缀白名单（不在其中统一按 .webm 处理）
-_VC_AUDIO_SUFFIXES = (".webm", ".webma", ".ogg", ".mp3", ".wav", ".opus")
+_VC_AUDIO_SUFFIXES = upload_store.AUDIO_SUFFIXES
 
 
 @router.post("/vc_audio_upload")
@@ -428,6 +428,8 @@ async def vc_audio_upload(
     然后前端通过 socket 发送 vc_audio_end 时携带 file_id，
     后端管线直接从磁盘读取文件，避免 base64 分片在 socket 中乱序。
     """
+    file_id = ""
+    succeeded = False
     try:
         if not file.filename:
             return JSONResponse(content={"error": "没有文件"}, status_code=400)
@@ -462,6 +464,7 @@ async def vc_audio_upload(
                   sid, file_id, file_size, dest_path)
 
         # 只回传 file_id：服务器绝对路径属于内部信息，前端拿到 file_id 即可
+        succeeded = True
         return JSONResponse(content={
             "ok": True,
             "file_id": file_id,
@@ -470,3 +473,6 @@ async def vc_audio_upload(
     except Exception as e:
         _log.error("[VC Upload] 上传失败: %s", e, exc_info=True)
         return JSONResponse(content={"error": "音频上传失败，请重试"}, status_code=500)
+    finally:
+        if file_id and not succeeded:
+            upload_store.drop(file_id)

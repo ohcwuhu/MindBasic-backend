@@ -5,17 +5,28 @@ import uuid
 from datetime import timedelta
 from pathlib import Path
 
-from sqlalchemy import func, select
+from collections import defaultdict
+
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.ai_conversation import AiConversation, AiMessage
 from app.core.exceptions import AppError
 from app.models.chat import ChatConversation, ChatMessage
+from app.models.coach import Appointment, CoachProfile
 from app.models.compliance import DataExport
 from app.models.content import Article, ArticleFavorite
-from app.models.growth import CheckIn, EmotionJournal, SelfCoachingRecord, UserBadge
+from app.models.growth import (
+    CheckIn,
+    EmotionJournal,
+    GrowthAssessmentResult,
+    GrowthAssessmentTemplate,
+    SelfCoachingRecord,
+    UserBadge,
+)
 from app.models.user import User
 from app.models.v1_1 import Order, Review, Wallet, WalletTransaction
-from app.services.appointment_service import list_my_appointments, my_appointments_to_out
+from app.services.appointment_service import my_appointments_to_out
 from app.utils.format import mask_phone
 from app.utils.time import to_iso, utcnow_naive
 
@@ -29,7 +40,13 @@ async def _collect_export_data(db: AsyncSession, user: User) -> dict:
         return to_iso(dt)
 
     # 预约
-    appointments, _ = await list_my_appointments(db, user.id, None, 1, 1000)
+    appointments = list(
+        await db.scalars(
+            select(Appointment)
+            .where(Appointment.user_id == user.id)
+            .order_by(Appointment.created_at.desc())
+        )
+    )
     appointment_items = await my_appointments_to_out(db, appointments)
 
     # 订单与钱包流水
@@ -78,24 +95,37 @@ async def _collect_export_data(db: AsyncSession, user: User) -> dict:
         for a in await db.scalars(select(Article).where(Article.id.in_(article_ids)))
     } if article_ids else {}
 
-    # 会话与消息
+    # 用户—教练私信。教练本人也应导出自己可访问的会话，但不混入个案备注等内部资料。
+    coach_profile_id = await db.scalar(
+        select(CoachProfile.id).where(CoachProfile.user_id == user.id)
+    )
+    chat_filter = ChatConversation.user_id == user.id
+    if coach_profile_id is not None:
+        chat_filter = or_(chat_filter, ChatConversation.coach_id == coach_profile_id)
     convs = list(
         await db.scalars(
-            select(ChatConversation).where(ChatConversation.user_id == user.id).order_by(ChatConversation.created_at.desc())
+            select(ChatConversation)
+            .where(chat_filter)
+            .order_by(ChatConversation.created_at.desc())
         )
     )
+    conv_ids = [conv.id for conv in convs]
+    all_chat_messages = list(
+        await db.scalars(
+            select(ChatMessage)
+            .where(ChatMessage.conversation_id.in_(conv_ids))
+            .order_by(ChatMessage.created_at.asc())
+        )
+    ) if conv_ids else []
+    chat_messages_by_conv: dict[int, list[ChatMessage]] = defaultdict(list)
+    for message in all_chat_messages:
+        chat_messages_by_conv[message.conversation_id].append(message)
     conversations: list[dict] = []
     for conv in convs:
-        msgs = list(
-            await db.scalars(
-                select(ChatMessage)
-                .where(ChatMessage.conversation_id == conv.id)
-                .order_by(ChatMessage.created_at.asc())
-            )
-        )
         conversations.append({
             "conversation_id": conv.id,
             "created_at": iso(conv.created_at),
+            "my_role": "COACH" if conv.coach_id == coach_profile_id else "USER",
             "messages": [
                 {
                     "sender_role": m.sender_role,
@@ -103,9 +133,74 @@ async def _collect_export_data(db: AsyncSession, user: User) -> dict:
                     "read_at": iso(m.read_at),
                     "created_at": iso(m.created_at),
                 }
-                for m in msgs
+                for m in chat_messages_by_conv.get(conv.id, [])
             ],
         })
+
+    # AI 自我教练会话与消息
+    ai_convs = list(
+        await db.scalars(
+            select(AiConversation)
+            .where(AiConversation.user_id == user.id)
+            .order_by(AiConversation.created_at.desc())
+        )
+    )
+    ai_conv_ids = [conv.id for conv in ai_convs]
+    ai_messages = list(
+        await db.scalars(
+            select(AiMessage)
+            .where(AiMessage.conversation_id.in_(ai_conv_ids))
+            .order_by(AiMessage.turn_index.asc(), AiMessage.created_at.asc(), AiMessage.id.asc())
+        )
+    ) if ai_conv_ids else []
+    ai_messages_by_conv: dict[int, list[AiMessage]] = defaultdict(list)
+    for message in ai_messages:
+        ai_messages_by_conv[message.conversation_id].append(message)
+    ai_conversation_items = [
+        {
+            "id": conv.id,
+            "title": conv.title,
+            "status": conv.status,
+            "message_count": conv.message_count,
+            "turn_count": conv.turn_count,
+            "final_stage": conv.final_stage,
+            "max_risk_level": conv.max_risk_level,
+            "consent": conv.consent,
+            "summary": conv.summary,
+            "summary_confirmed_at": iso(conv.summary_confirmed_at),
+            "journal_id": conv.journal_id,
+            "created_at": iso(conv.created_at),
+            "ended_at": iso(conv.ended_at),
+            "messages": [
+                {
+                    "role": m.role,
+                    "content": m.content,
+                    "turn_index": m.turn_index,
+                    "stage": m.stage,
+                    "risk_level": m.risk_level,
+                    "created_at": iso(m.created_at),
+                }
+                for m in ai_messages_by_conv.get(conv.id, [])
+            ],
+        }
+        for conv in ai_convs
+    ]
+
+    assessment_rows = (
+        await db.execute(
+            select(
+                GrowthAssessmentResult,
+                GrowthAssessmentTemplate.name,
+                GrowthAssessmentTemplate.version,
+            )
+            .join(
+                GrowthAssessmentTemplate,
+                GrowthAssessmentTemplate.id == GrowthAssessmentResult.template_id,
+            )
+            .where(GrowthAssessmentResult.user_id == user.id)
+            .order_by(GrowthAssessmentResult.created_at.desc())
+        )
+    ).all()
 
     return {
         "exported_at": iso(utcnow_naive()),
@@ -168,6 +263,20 @@ async def _collect_export_data(db: AsyncSession, user: User) -> dict:
             for f in fav_rows
         ],
         "conversations": conversations,
+        "ai_conversations": ai_conversation_items,
+        "growth_assessments": [
+            {
+                "id": result.id,
+                "template_id": result.template_id,
+                "template_name": template_name,
+                "template_version": template_version,
+                "answers": result.answers,
+                "scores": result.scores,
+                "report": result.report,
+                "created_at": iso(result.created_at),
+            }
+            for result, template_name, template_version in assessment_rows
+        ],
     }
 
 

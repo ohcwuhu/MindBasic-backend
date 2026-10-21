@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppError
 from app.models.chat import ChatConversation, ChatMessage
-from app.models.coach import CoachProfile
+from app.models.coach import Appointment, CoachProfile
 from app.models.user import User
 from app.services.crisis_service import maybe_flag_crisis
 from app.utils.time import to_iso, utcnow_naive
@@ -37,6 +37,21 @@ async def _is_member(db: AsyncSession, user_id: int, conversation_id: int) -> Ch
     raise AppError(403, "FORBIDDEN", "无权访问该会话")
 
 
+async def _has_appointment(db: AsyncSession, user_id: int, coach_id: int) -> bool:
+    """预约是私信解锁的业务依据；查询现有预约，避免依赖回调先后顺序。"""
+    return (
+        await db.scalar(
+            select(Appointment.id)
+            .where(
+                Appointment.user_id == user_id,
+                Appointment.coach_id == coach_id,
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
 async def get_or_create_conversation(db: AsyncSession, user: User, coach_id: int) -> ChatConversation:
     profile = await _get_approved_coach(db, coach_id)
     if profile.user_id == user.id:
@@ -47,11 +62,19 @@ async def get_or_create_conversation(db: AsyncSession, user: User, coach_id: int
             ChatConversation.coach_id == coach_id,
         )
     )
+    unlocked = await _has_appointment(db, user.id, coach_id)
     if conv is None:
-        conv = ChatConversation(user_id=user.id, coach_id=coach_id, free_limit=FREE_REPLY_LIMIT)
+        conv = ChatConversation(
+            user_id=user.id,
+            coach_id=coach_id,
+            free_limit=FREE_REPLY_LIMIT,
+            unlocked=unlocked,
+        )
         db.add(conv)
-        await db.commit()
-        await db.refresh(conv)
+    elif unlocked and not conv.unlocked:
+        conv.unlocked = True
+    await db.commit()
+    await db.refresh(conv)
     return conv
 
 
@@ -108,10 +131,23 @@ async def list_conversations(db: AsyncSession, user: User) -> list[dict]:
         )
     ).all()
     unread_map = {conv_id: count for conv_id, count in unread_rows}
+    booked_coach_ids = (
+        set(
+            await db.scalars(
+                select(Appointment.coach_id).where(
+                    Appointment.user_id == user.id,
+                    Appointment.coach_id.in_({c.coach_id for c in convs}),
+                )
+            )
+        )
+        if not is_coach
+        else set()
+    )
 
     result = []
     for conv in convs:
         nickname, avatar = peer_map[conv.id]
+        unlocked = bool(conv.unlocked) or conv.coach_id in booked_coach_ids
         result.append(
             {
                 "id": conv.id,
@@ -123,8 +159,8 @@ async def list_conversations(db: AsyncSession, user: User) -> list[dict]:
                 "unreadCount": unread_map.get(conv.id, 0),
                 "freeLimit": conv.free_limit,
                 "coachReplyCount": conv.coach_reply_count,
-                "unlocked": bool(conv.unlocked),
-                "limitReached": (not conv.unlocked) and conv.coach_reply_count >= conv.free_limit,
+                "unlocked": unlocked,
+                "limitReached": (not unlocked) and conv.coach_reply_count >= conv.free_limit,
             }
         )
     return result
@@ -154,6 +190,8 @@ async def send_message(
     db: AsyncSession, user_id: int, conversation_id: int, content: str
 ) -> ChatMessage:
     conv = await _is_member(db, user_id, conversation_id)
+    if not conv.unlocked and await _has_appointment(db, conv.user_id, conv.coach_id):
+        conv.unlocked = True
     role = "COACH" if conv.user_id != user_id else "USER"
     if not conv.unlocked and conv.coach_reply_count >= conv.free_limit:
         if role == "COACH":
@@ -177,7 +215,13 @@ async def send_message(
     return msg
 
 
-async def unlock_conversation(db: AsyncSession, user_id: int, coach_id: int) -> None:
+async def unlock_conversation(
+    db: AsyncSession,
+    user_id: int,
+    coach_id: int,
+    *,
+    commit: bool = True,
+) -> None:
     """用户预约后解锁该用户-教练会话（后续沟通不再受限）。"""
     conv = await db.scalar(
         select(ChatConversation).where(
@@ -187,7 +231,8 @@ async def unlock_conversation(db: AsyncSession, user_id: int, coach_id: int) -> 
     )
     if conv is not None and not conv.unlocked:
         conv.unlocked = True
-        await db.commit()
+        if commit:
+            await db.commit()
 
 
 async def mark_read(db: AsyncSession, user_id: int, conversation_id: int) -> int:

@@ -51,7 +51,7 @@ from app.services.coach_service import (
     update_profile,
 )
 from app.utils.format import mask_phone
-from app.utils.time import to_iso
+from app.utils.time import business_today, to_iso
 from app.services.appointment_service import (
     cancel_coach_appointment,
     coach_appointments_to_out,
@@ -187,10 +187,11 @@ async def coach_slots(
     coach: CoachProfile = Depends(get_current_coach),
     db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    from datetime import date, timedelta
+    from datetime import timedelta
 
-    start = startDate or date.today().isoformat()
-    end = endDate or (date.today() + timedelta(days=14)).isoformat()
+    today = business_today()
+    start = startDate or today.isoformat()
+    end = endDate or (today + timedelta(days=14)).isoformat()
     slots = await list_coach_slots(db, coach.id, start, end)
     items = [
         SlotOut(
@@ -384,7 +385,10 @@ async def platform_phrases_endpoint(
 @router.get("/appointments")
 async def coach_appointments(
     request: Request,
-    status: str | None = Query(default=None, pattern="^(PENDING|CONFIRMED|COMPLETED|CANCELLED)$"),
+    status: str | None = Query(
+        default=None,
+        pattern="^(PENDING|CONFIRMED|COMPLETED|CANCELLED|NO_SHOW|RESCHEDULED)$",
+    ),
     date: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
     page: int = Query(default=1, ge=1),
     pageSize: int = Query(default=10, ge=1, le=50, alias="pageSize"),

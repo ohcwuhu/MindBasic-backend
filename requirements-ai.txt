@@ -17,4 +17,6 @@ onnx>=1.16.0
 opencv-python>=4.9.0
 imageio-ffmpeg>=0.6.0
 soundfile>=0.13.0
-edge-tts>=6.1.0
+edge-tts>=7.3.1
+# ↑ 不能降回 6.x / 7.2.x：微软已把鉴权令牌换成 Sec-MS-GEC v2（"2-" 前缀 + 16hex-64hex 两段），
+#   旧版本发 v1 令牌，WSS 握手会被拒 —— 前端表现为「[tts] 403, message='Invalid response status'」

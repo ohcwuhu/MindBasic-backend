@@ -243,7 +243,7 @@ def _score_labels(text: str) -> dict[str, float]:
         entail = logits[:, _entail_idx]
         exp = np.exp(entail - entail.max())
         probs = exp / exp.sum()
-        return {label: float(p) for label, p in zip(labels, probs)}
+        return {label: float(p) for label, p in zip(labels, probs, strict=False)}
 
     # batch_size 需显式指定：零样本分类默认逐标签前向（7 个标签 = 7 次推理），
     # 一次批量后 CPU 上实测从 ~8.4s 降到 ~2.9s。

@@ -1,6 +1,6 @@
 """数据库会话：同步会话（Alembic/脚本/测试）与异步会话（应用运行时）。"""
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -30,3 +30,20 @@ engine = create_engine(
     pool_recycle=3600,
 )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+
+def _set_utc_session(dbapi_connection, _connection_record) -> None:
+    """连接建立后统一使用 UTC。
+
+    ``CURRENT_TIMESTAMP`` / ``NOW()`` / ``CURDATE()`` 都随 MySQL 会话时区变化；
+    只在序列化层补 ``Z`` 不能修正数据库默认值，因此必须从连接层统一。
+    """
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("SET time_zone = '+00:00'")
+    finally:
+        cursor.close()
+
+
+event.listen(async_engine.sync_engine, "connect", _set_utc_session)
+event.listen(engine, "connect", _set_utc_session)

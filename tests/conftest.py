@@ -3,10 +3,20 @@ import time
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 # 测试环境关闭生产调度器，避免定时任务在测试进程内触发
 os.environ["SCHEDULER_ENABLED"] = "false"
+
+# 数据库测试必须显式指向独立测试库。缺少该变量时直接阻止运行，
+# 避免 -q / IDE 的默认 pytest 命令误连日常开发库。
+test_database_url = os.environ.get("TEST_DATABASE_URL", "").strip()
+if not test_database_url:
+    raise RuntimeError(
+        "数据库集成测试需要 TEST_DATABASE_URL（独立测试库）。"
+        "纯单元测试请使用 --noconftest。"
+    )
+os.environ["DATABASE_URL"] = test_database_url
 
 from app.db.session import SessionLocal
 from app.db import session as db_session
@@ -27,6 +37,7 @@ _test_engine = create_async_engine(
     poolclass=NullPool,
     pool_pre_ping=True,
 )
+event.listen(_test_engine.sync_engine, "connect", db_session._set_utc_session)
 db_session.async_engine = _test_engine
 db_session.AsyncSessionLocal.configure(bind=_test_engine)
 

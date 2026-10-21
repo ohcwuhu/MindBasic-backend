@@ -55,6 +55,7 @@ from app.core.exceptions import AppError
 from app.core.metrics import HTTP_DURATION, HTTP_REQUESTS, metrics_body
 from app.core.logging import get_logger, setup_logging
 from app.core.scheduler import shutdown_scheduler, start_scheduler
+from app.core.tasks import drain_tasks
 from app.db.session import AsyncSessionLocal
 
 setup_logging()
@@ -140,6 +141,7 @@ async def lifespan(_: FastAPI):
     start_scheduler()
     yield
     shutdown_scheduler()
+    await drain_tasks()
 
 
 app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)

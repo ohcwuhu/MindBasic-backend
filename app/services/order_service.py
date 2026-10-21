@@ -30,11 +30,23 @@ def order_pay_expire_at() -> datetime:
 
 async def _load_order_for_update(db: AsyncSession, order_no: str, user_id: int) -> Order:
     order = await db.scalar(
-        select(Order).where(Order.order_no == order_no).with_for_update()
+        select(Order)
+        .where(Order.order_no == order_no)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if order is None or order.user_id != user_id:
         raise AppError(404, "ORDER_NOT_FOUND", "订单不存在")
     return order
+
+
+async def _load_order_by_id_for_update(db: AsyncSession, order_id: int) -> Order | None:
+    return await db.scalar(
+        select(Order)
+        .where(Order.id == order_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
 
 
 async def get_order_or_404(db: AsyncSession, order_no: str, user: User) -> Order:
@@ -105,7 +117,12 @@ async def pay_order(
         paid_at=now,
     ))
     if order.appointment_id is not None:
-        appointment = await db.get(Appointment, order.appointment_id)
+        appointment = await db.scalar(
+            select(Appointment)
+            .where(Appointment.id == order.appointment_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if appointment is not None and appointment.status == "PENDING":
             await notify(
                 db,
@@ -121,9 +138,20 @@ async def pay_order(
 
 async def close_expired_order(db: AsyncSession, order: Order, commit: bool = True) -> None:
     """超时未支付：订单 CLOSED + 预约取消 + 释放时段。"""
+    current = await _load_order_by_id_for_update(db, order.id)
+    if current is None:
+        raise AppError(404, "ORDER_NOT_FOUND", "订单不存在")
+    order = current
+    if order.status != "CREATED":
+        return
     order.status = "CLOSED"
     if order.appointment_id is not None:
-        appointment = await db.get(Appointment, order.appointment_id)
+        appointment = await db.scalar(
+            select(Appointment)
+            .where(Appointment.id == order.appointment_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if appointment is not None and appointment.status == "PENDING":
             appointment.status = "CANCELLED"
             appointment.cancel_reason = "超时未支付，订单已关闭"
@@ -134,7 +162,12 @@ async def close_expired_order(db: AsyncSession, order: Order, commit: bool = Tru
                 event="CANCEL_SYSTEM",
                 note="超时未支付自动取消",
             ))
-            slot = await db.get(CoachSlot, appointment.slot_id)
+            slot = await db.scalar(
+                select(CoachSlot)
+                .where(CoachSlot.id == appointment.slot_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
             if slot is not None and slot.status == "BOOKED":
                 slot.status = "AVAILABLE"
             await notify(
@@ -150,6 +183,10 @@ async def close_expired_order(db: AsyncSession, order: Order, commit: bool = Tru
 
 async def close_unpaid_order(db: AsyncSession, order: Order) -> Order:
     """用户主动取消未支付订单。"""
+    current = await _load_order_by_id_for_update(db, order.id)
+    if current is None:
+        raise AppError(404, "ORDER_NOT_FOUND", "订单不存在")
+    order = current
     if order.status != "CREATED":
         raise AppError(409, "INVALID_STATE_TRANSITION", "订单状态不允许关闭")
     order.status = "CLOSED"
@@ -163,6 +200,10 @@ async def refund_paid_order(
     reason: str,
 ) -> Order:
     """已支付订单退款：退款单 + 余额退回 + 支付流水标记 REFUNDED。"""
+    current = await _load_order_by_id_for_update(db, order.id)
+    if current is None:
+        raise AppError(404, "ORDER_NOT_FOUND", "订单不存在")
+    order = current
     if order.status != "PAID":
         raise AppError(409, "INVALID_STATE_TRANSITION", "仅已支付订单可退款")
     if amount_in_cents <= 0 or amount_in_cents > order.amount_in_cents:

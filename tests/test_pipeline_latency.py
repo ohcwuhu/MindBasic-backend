@@ -17,8 +17,6 @@ DeepFace 等重模型，单测代价过高；这一点与 ``test_runtime_guards`
 import asyncio
 import inspect
 
-import pytest
-
 from app.services.ai_lab import dify_service
 from app.services.ai_lab import socket_events
 

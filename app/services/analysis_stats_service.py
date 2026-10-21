@@ -19,7 +19,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any, Sequence
 
 from sqlalchemy import func, select
@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.ai_conversation import AiConversation, AiMessage
 from app.models.analysis import MultimodalAnalysisRecord
+from app.utils.time import utc_naive_to_business, utcnow_naive
 
 #: 明细抽样上限（分位数基于该数量计算，返回结果中会说明）
 SAMPLE_CAP = 5000
@@ -281,7 +282,7 @@ async def multimodal_overview(
     sample_cap: int = SAMPLE_CAP,
 ) -> dict[str, Any]:
     """统计窗口内的多模态留痕与 AI 教练会话。"""
-    start = datetime.now() - timedelta(days=days)
+    start = utcnow_naive() - timedelta(days=days)
 
     filters = [MultimodalAnalysisRecord.created_at >= start]
     if source:
@@ -350,7 +351,9 @@ async def multimodal_overview(
         "distinctUsers": int(user_count),
     }
 
-    day_col = func.date(MultimodalAnalysisRecord.created_at)
+    day_col = func.date(
+        func.convert_tz(MultimodalAnalysisRecord.created_at, "+00:00", "+08:00")
+    )
     daily_rows = (
         await db.execute(
             select(day_col.label("day"), func.count().label("cnt"))
@@ -364,8 +367,8 @@ async def multimodal_overview(
     ]
     overview["range"] = {
         "days": days,
-        "from": start.date().isoformat(),
-        "to": datetime.now().date().isoformat(),
+        "from": utc_naive_to_business(start).date().isoformat(),
+        "to": utc_naive_to_business(utcnow_naive()).date().isoformat(),
         "source": source,
     }
     return overview

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import select
@@ -25,7 +25,7 @@ from app.services.emotion_journal_service import (
     pick_feedback,
 )
 from app.services.crisis_service import maybe_flag_crisis
-from app.utils.time import utcnow_naive
+from app.utils.time import business_day_range_utc_naive, business_today, utcnow_naive
 
 router = APIRouter(prefix="/emotion-journals", tags=["emotion-journals"])
 
@@ -83,9 +83,13 @@ async def list_journals(
     request: Request,
     page: int = Query(default=1, ge=1),
     pageSize: int = Query(default=10, ge=1, le=50, alias="pageSize"),
+    journalDate: date | None = Query(default=None, alias="date"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_db),
 ) -> dict:
+    start_at = end_at = None
+    if journalDate is not None:
+        start_at, end_at = business_day_range_utc_naive(journalDate)
     stmt = (
         select(EmotionJournal)
         .where(EmotionJournal.user_id == user.id)
@@ -93,9 +97,14 @@ async def list_journals(
         .offset((page - 1) * pageSize)
         .limit(pageSize)
     )
+    if start_at is not None:
+        stmt = stmt.where(
+            EmotionJournal.created_at >= start_at,
+            EmotionJournal.created_at < end_at,
+        )
     journals = list(await db.scalars(stmt))
     items = [EmotionJournalOut(**journal_to_out(j)).model_dump(by_alias=True) for j in journals]
-    total = await count_journals(db, user.id)
+    total = await count_journals(db, user.id, start_at=start_at, end_at=end_at)
     return ok(paginated(items, total, page, pageSize), trace_id=request.state.trace_id)
 
 
@@ -122,10 +131,24 @@ async def journal_calendar(
     if month:
         year, mon = (int(part) for part in month.split("-"))
     else:
-        now = datetime.now()
+        now = business_today()
         year, mon = now.year, now.month
     return ok(
         EmotionCalendarOut(**await journals_calendar(db, user.id, year, mon)).model_dump(by_alias=True),
+        trace_id=request.state.trace_id,
+    )
+
+
+@router.get("/{journal_id}")
+async def get_journal(
+    journal_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_db),
+) -> dict:
+    journal = await get_own_journal_or_404(db, user.id, journal_id)
+    return ok(
+        EmotionJournalOut(**journal_to_out(journal)).model_dump(by_alias=True),
         trace_id=request.state.trace_id,
     )
 

@@ -1,6 +1,7 @@
 """维护任务：孤儿上传文件扫描 + 异常中断的 AI 教练会话收尾（定时任务调用）。"""
 
 from datetime import datetime, timedelta
+import time
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,11 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.files import UPLOAD_DIR
 from app.models.ai_conversation import AiConversation
 from app.models.file import FileUpload
+from app.services.ai_lab import upload_store
 
 _ALLOWED_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".pdf"}
 
 #: 会话超过该时长仍停留在 ACTIVE，视为客户端异常断开
 STALE_SESSION_HOURS = 6
+VC_UPLOAD_MAX_AGE_MINUTES = 30
 
 
 async def sweep_orphan_uploads(db: AsyncSession) -> int:
@@ -36,6 +39,40 @@ async def sweep_orphan_uploads(db: AsyncSession) -> int:
             removed += 1
         except OSError:
             continue
+    return removed
+
+
+def sweep_orphan_vc_uploads(
+    *,
+    max_age_minutes: int = VC_UPLOAD_MAX_AGE_MINUTES,
+    now_ts: float | None = None,
+) -> int:
+    """清理超时且不在处理中的视频通话音频。
+
+    文件名必须符合上传接口的 32 位十六进制规则；在途文件只按内存标记保护，
+    不扫描系统临时目录的其他内容。
+    """
+    removed = 0
+    cutoff = (time.time() if now_ts is None else now_ts) - max_age_minutes * 60
+    try:
+        entries = list(upload_store.UPLOAD_DIR.iterdir())
+    except OSError:
+        return 0
+    for path in entries:
+        if not path.is_file() or path.suffix.lower() not in upload_store.AUDIO_SUFFIXES:
+            continue
+        file_id = path.stem.lower()
+        if len(file_id) != 32 or any(c not in "0123456789abcdef" for c in file_id):
+            continue
+        if upload_store.is_active(file_id):
+            continue
+        try:
+            if path.stat().st_mtime > cutoff:
+                continue
+        except OSError:
+            continue
+        if upload_store.drop(file_id):
+            removed += 1
     return removed
 
 

@@ -96,7 +96,12 @@ async def admin_refund_order(
         ip=request.client.host if request.client else None,
     )
     if order.appointment_id is not None:
-        appointment = await db.get(Appointment, order.appointment_id)
+        appointment = await db.scalar(
+            select(Appointment)
+            .where(Appointment.id == order.appointment_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
         if appointment is not None and appointment.status in ("PENDING", "CONFIRMED"):
             appointment.status = "CANCELLED"
             appointment.cancel_reason = "管理员退款取消"
@@ -108,7 +113,12 @@ async def admin_refund_order(
                 event="CANCEL_SYSTEM",
                 note="管理员退款取消",
             ))
-            slot = await db.get(CoachSlot, appointment.slot_id)
+            slot = await db.scalar(
+                select(CoachSlot)
+                .where(CoachSlot.id == appointment.slot_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
             if slot is not None and slot.status == "BOOKED":
                 slot.status = "AVAILABLE"
             await notify(

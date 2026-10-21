@@ -1,7 +1,5 @@
 """每日打卡、勋章与排行榜。"""
 
-from datetime import date, datetime
-
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,7 +19,7 @@ from app.services.checkin_service import (
     my_checkins,
     my_stats,
 )
-from app.utils.time import to_iso
+from app.utils.time import business_today, to_iso, utcnow_naive
 
 router = APIRouter(prefix="/check-ins", tags=["check-ins"])
 
@@ -53,7 +51,7 @@ async def daily_check_in(
                     name=b.name,
                     description=b.description,
                     icon=b.icon,
-                    earned_at=datetime.now().isoformat(),
+                    earned_at=to_iso(utcnow_naive()),
                 ).model_dump(by_alias=True)
                 for b in earned
             ],
@@ -69,7 +67,7 @@ async def my_checkins_endpoint(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_async_db),
 ) -> dict:
-    month = month or date.today().strftime("%Y-%m")
+    month = month or business_today().strftime("%Y-%m")
     rows = await my_checkins(db, user.id, month)
     items = [CheckInOut(**checkin_to_out(r)).model_dump(by_alias=True) for r in rows]
     return ok({"items": items}, trace_id=request.state.trace_id)

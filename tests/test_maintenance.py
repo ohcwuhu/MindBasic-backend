@@ -5,7 +5,7 @@ import time as time_mod
 import uuid
 from datetime import timedelta
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 
 from app.db.session import AsyncSessionLocal, SessionLocal
 from app.models.ai_conversation import AiConversation
@@ -22,6 +22,18 @@ from app.utils.time import utcnow_naive
 
 def unique_phone() -> str:
     return "135" + str(int(time_mod.time() * 1000) % 100000000).zfill(8)
+
+
+def test_database_session_uses_utc():
+    db = SessionLocal()
+    try:
+        zone, now, utc_now = db.execute(
+            text("SELECT @@session.time_zone, NOW(), UTC_TIMESTAMP()")
+        ).one()
+        assert zone == "+00:00"
+        assert abs((now - utc_now).total_seconds()) < 1
+    finally:
+        db.close()
 
 
 def test_cleanup_expired_exports(client):

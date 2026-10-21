@@ -78,3 +78,18 @@ def pending_count() -> int:
 def reset() -> None:
     """清空登记表（测试隔离用；不会取消任务）。"""
     _tasks.clear()
+
+
+async def drain_tasks(max_wait_seconds: float = 5.0) -> int:
+    """关停时等待已登记任务，返回超时后仍未完成的数量。"""
+    pending = {task for task in _tasks if not task.done()}
+    if not pending:
+        return 0
+    _, unfinished = await asyncio.wait(pending, timeout=max(0.0, max_wait_seconds))
+    if unfinished:
+        log.warning(
+            "关停排空超时，仍有 %d 个后台任务未完成：%s",
+            len(unfinished),
+            ", ".join(sorted(task.get_name() for task in unfinished)),
+        )
+    return len(unfinished)

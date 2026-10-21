@@ -1,15 +1,18 @@
 """支付锁定阶段一：余额 / 模拟支付 / 退款 / 超时释放。"""
 
+import asyncio
 import time as time_mod
 from datetime import date, time, timedelta
 
 import pytest
 from sqlalchemy import select, update
 
-from app.db.session import SessionLocal
+from app.core.exceptions import AppError
+from app.db.session import AsyncSessionLocal, SessionLocal
 from app.models.coach import Appointment, CoachSlot
 from app.models.user import User
 from app.models.v1_1 import Order, Payment, Refund
+from app.services.appointment_service import cancel_my_appointment
 from app.utils.time import utcnow_naive
 
 
@@ -71,11 +74,15 @@ def pay_env(client, admin_headers):
         day = date.today() + timedelta(days=2)
         s1 = CoachSlot(coach_id=coach_id, date=day, start_time=time(10, 0), end_time=time(11, 0), status="AVAILABLE")
         s2 = CoachSlot(coach_id=coach_id, date=day, start_time=time(14, 0), end_time=time(15, 0), status="AVAILABLE")
-        db.add_all([s1, s2])
+        s3 = CoachSlot(coach_id=coach_id, date=day, start_time=time(16, 0), end_time=time(17, 0), status="AVAILABLE")
+        s4 = CoachSlot(coach_id=coach_id, date=day, start_time=time(18, 0), end_time=time(19, 0), status="AVAILABLE")
+        db.add_all([s1, s2, s3, s4])
         db.commit()
         db.refresh(s1)
         db.refresh(s2)
-        slot_ids = [s1.id, s2.id]
+        db.refresh(s3)
+        db.refresh(s4)
+        slot_ids = [s1.id, s2.id, s3.id, s4.id]
     finally:
         db.close()
 
@@ -168,6 +175,25 @@ def test_pay_confirm_refund_flow(client, pay_env):
     item = next(a for a in mine if a["id"] == data["id"])
     assert item["paymentStatus"] == "PAID"
 
+    changed = client.patch(
+        f"/api/v1/coach/services/{pay_env['service_id']}",
+        headers=pay_env["coach_headers"],
+        json={"name": "改名后的服务", "priceInCents": 19900, "durationMin": 90},
+    )
+    assert changed.status_code == 200
+    mine = client.get("/api/v1/appointments/mine", headers=headers).json()["data"]["items"]
+    old_order = next(a for a in mine if a["id"] == data["id"])
+    assert old_order["service"]["name"] == "单次咨询"
+    assert old_order["service"]["durationMin"] == 60
+    assert old_order["service"]["priceInCents"] == 9900
+    assert old_order["amountInCents"] == 9900
+    restored = client.patch(
+        f"/api/v1/coach/services/{pay_env['service_id']}",
+        headers=pay_env["coach_headers"],
+        json={"name": "单次咨询", "priceInCents": 9900, "durationMin": 60},
+    )
+    assert restored.status_code == 200
+
     # 已支付后可确认
     resp = client.post(
         f"/api/v1/coach/appointments/{data['id']}/confirm", headers=pay_env["coach_headers"]
@@ -226,3 +252,90 @@ def test_admin_orders_list(client, pay_env, admin_headers):
     assert resp.status_code == 200
     assert resp.json()["data"]["pagination"]["totalItems"] >= 1
     assert any(o["user"]["nickname"] == "支付用户" for o in resp.json()["data"]["items"])
+
+
+def test_concurrent_cancel_refunds_only_once(client, pay_env):
+    headers = pay_env["user_headers"]
+    data = book(client, headers, pay_env, 2)
+    client.post("/api/v1/wallet/topup", headers=headers, json={"amountInCents": 9900})
+    paid = client.post(
+        f"/api/v1/orders/{data['orderNo']}/pay",
+        headers=headers,
+        json={"method": "BALANCE"},
+    )
+    assert paid.status_code == 200
+
+    async def _cancel_once() -> str:
+        async with AsyncSessionLocal() as db:
+            user = await db.scalar(select(User).where(User.nickname == "支付用户"))
+            try:
+                await cancel_my_appointment(db, user, data["id"], "并发取消测试")
+                return "ok"
+            except AppError as exc:
+                await db.rollback()
+                return exc.code
+
+    async def _run_both():
+        return await asyncio.gather(_cancel_once(), _cancel_once())
+
+    results = asyncio.run(_run_both())
+    assert results.count("ok") == 1
+    assert results.count("INVALID_STATE_TRANSITION") == 1
+
+    db = SessionLocal()
+    try:
+        order = db.scalar(select(Order).where(Order.order_no == data["orderNo"]))
+        refunds = list(db.scalars(select(Refund).where(Refund.order_id == order.id)))
+        assert order.status == "REFUNDED"
+        assert len(refunds) == 1
+        historical_appointment = db.get(Appointment, data["id"])
+        assert historical_appointment is not None
+        historical_slot_id = int(historical_appointment.slot_id)
+    finally:
+        db.close()
+
+    day = (date.today() + timedelta(days=2)).isoformat()
+    replaced = client.put(
+        "/api/v1/coach/slots",
+        headers=pay_env["coach_headers"],
+        json={"slots": [{"date": day, "startTime": "18:00", "endTime": "19:00"}]},
+    )
+    assert replaced.status_code == 200
+
+    db = SessionLocal()
+    try:
+        historical_slot = db.get(CoachSlot, historical_slot_id)
+        assert historical_slot is not None
+        assert historical_slot.status == "OFF"
+        assert db.get(Appointment, data["id"]) is not None
+    finally:
+        db.close()
+
+
+def test_effective_no_show_filter_matches_item_state(client, pay_env):
+    headers = pay_env["user_headers"]
+    data = book(client, headers, pay_env, 3)
+    client.post("/api/v1/wallet/topup", headers=headers, json={"amountInCents": 9900})
+    paid = client.post(
+        f"/api/v1/orders/{data['orderNo']}/pay",
+        headers=headers,
+        json={"method": "BALANCE"},
+    )
+    assert paid.status_code == 200
+
+    db = SessionLocal()
+    try:
+        slot = db.get(CoachSlot, pay_env["slot_ids"][3])
+        slot.date = date.today() - timedelta(days=1)
+        slot.start_time = time(10, 0)
+        slot.end_time = time(11, 0)
+        db.commit()
+    finally:
+        db.close()
+
+    no_show = client.get("/api/v1/appointments/mine?status=NO_SHOW", headers=headers).json()["data"]
+    assert any(item["id"] == data["id"] and item["status"] == "NO_SHOW" for item in no_show["items"])
+    assert no_show["pagination"]["totalItems"] == len(no_show["items"])
+
+    pending = client.get("/api/v1/appointments/mine?status=PENDING", headers=headers).json()["data"]
+    assert all(item["id"] != data["id"] for item in pending["items"])

@@ -30,16 +30,18 @@ async def _run_cleanup() -> None:
             from app.services.data_export_service import cleanup_expired_exports
             from app.services.maintenance_service import (
                 sweep_orphan_uploads,
+                sweep_orphan_vc_uploads,
                 sweep_stale_coaching_sessions,
             )
 
             expired = await cleanup_expired_exports(db)
             orphans = await sweep_orphan_uploads(db)
+            vc_orphans = sweep_orphan_vc_uploads()
             stale = await sweep_stale_coaching_sessions(db)
-            if expired or orphans or stale:
+            if expired or orphans or vc_orphans or stale:
                 logger.info(
-                    "[SCHEDULER] 清理导出 %s 个、孤儿文件 %s 个、异常中断会话 %s 个",
-                    expired, orphans, stale,
+                    "[SCHEDULER] 清理导出 %s 个、孤儿文件 %s 个、音频 %s 个、异常中断会话 %s 个",
+                    expired, orphans, vc_orphans, stale,
                 )
     except Exception:  # noqa: BLE001
         logger.exception("[SCHEDULER] 清理任务异常")

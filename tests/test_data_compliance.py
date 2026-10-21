@@ -5,6 +5,8 @@ import time as time_mod
 from sqlalchemy import select, text
 
 from app.db.session import SessionLocal
+from app.models.ai_conversation import AiConversation, AiMessage
+from app.models.growth import GrowthAssessmentResult
 from app.services.data_export_service import EXPORT_DIR
 from app.models.user import User
 
@@ -101,6 +103,49 @@ def _seed_runtime_rows(user_id: int) -> None:
 def test_data_export_flow(client, admin_headers):
     acc = register(client)
     try:
+        user_id = _user_id(acc["phone"])
+        template = client.get(
+            "/api/v1/growth-assessments/template", headers=acc["headers"]
+        ).json()["data"]
+        db = SessionLocal()
+        try:
+            conversation = AiConversation(
+                user_id=user_id,
+                client_session_id="export-unit-sid",
+                title="导出覆盖测试",
+                status="ENDED",
+                message_count=2,
+                turn_count=1,
+                summary="这次对话已经确认过总结。",
+            )
+            db.add(conversation)
+            db.flush()
+            db.add_all([
+                AiMessage(
+                    conversation_id=conversation.id,
+                    role="USER",
+                    content="用户说出的内容",
+                    turn_index=1,
+                ),
+                AiMessage(
+                    conversation_id=conversation.id,
+                    role="ASSISTANT",
+                    content="助手回复的内容",
+                    turn_index=1,
+                ),
+                GrowthAssessmentResult(
+                    user_id=user_id,
+                    template_id=template["id"],
+                    answers={},
+                    scores=[],
+                    report={"summary": "导出测评报告"},
+                ),
+            ])
+            db.commit()
+            conversation_id = int(conversation.id)
+        finally:
+            db.close()
+
         created = client.post("/api/v1/users/me/data-export", headers=acc["headers"])
         assert created.status_code == 201
         export_id = created.json()["data"]["id"]
@@ -115,6 +160,14 @@ def test_data_export_flow(client, admin_headers):
         body = down.json()
         assert "profile" in body and "conversations" in body and "wallet_transactions" in body
         assert body["profile"]["nickname"] == "合规用户"
+        exported_ai = next(item for item in body["ai_conversations"] if item["id"] == conversation_id)
+        assert [m["content"] for m in exported_ai["messages"]] == [
+            "用户说出的内容",
+            "助手回复的内容",
+        ]
+        assert exported_ai["summary"] == "这次对话已经确认过总结。"
+        assert body["growth_assessments"][0]["template_id"] == template["id"]
+        assert body["growth_assessments"][0]["template_name"] == template["name"]
 
         logs = client.get("/api/v1/admin/audit-logs?action=USER_DATA_EXPORT&page=1&pageSize=10", headers=admin_headers)
         assert logs.status_code == 200

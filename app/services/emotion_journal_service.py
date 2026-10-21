@@ -9,7 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppError
 from app.models.growth import EmotionFeedbackLib, EmotionJournal
-from app.utils.time import to_iso
+from app.utils.time import (
+    business_day_range_utc_naive,
+    business_month_range_utc_naive,
+    business_today,
+    to_iso,
+)
 
 FALLBACK_FEEDBACK = "每一种感受都值得被看见。你愿意记录它，就已经在靠近自己。"
 
@@ -53,28 +58,44 @@ def journal_to_out(journal: EmotionJournal) -> dict:
     }
 
 
-async def count_journals(db: AsyncSession, user_id: int) -> int:
-    return (
-        await db.scalar(
-            select(func.count()).select_from(EmotionJournal).where(EmotionJournal.user_id == user_id)
-        )
-        or 0
+async def count_journals(
+    db: AsyncSession,
+    user_id: int,
+    *,
+    start_at=None,
+    end_at=None,
+) -> int:
+    stmt = select(func.count()).select_from(EmotionJournal).where(
+        EmotionJournal.user_id == user_id
     )
+    if start_at is not None:
+        stmt = stmt.where(EmotionJournal.created_at >= start_at)
+    if end_at is not None:
+        stmt = stmt.where(EmotionJournal.created_at < end_at)
+    return await db.scalar(stmt) or 0
 
 
 async def journals_trend(db: AsyncSession, user_id: int, days: int) -> dict:
-    """按天聚合情绪分布（以数据库本地日期为基准），返回最近 N 天 + 汇总。"""
-    day_col = func.date(EmotionJournal.created_at).label("day")
+    """按上海自然日聚合最近 N 天，并先在 SQL 中限定时间范围。"""
+    today = business_today()
+    start = today - timedelta(days=days - 1)
+    start_at, _ = business_day_range_utc_naive(start)
+    _, end_at = business_day_range_utc_naive(today)
+    day_col = func.date(
+        func.convert_tz(EmotionJournal.created_at, "+00:00", "+08:00")
+    ).label("day")
     rows = (
         await db.execute(
             select(day_col, EmotionJournal.mood_type, func.count().label("cnt"))
-            .where(EmotionJournal.user_id == user_id)
+            .where(
+                EmotionJournal.user_id == user_id,
+                EmotionJournal.created_at >= start_at,
+                EmotionJournal.created_at < end_at,
+            )
             .group_by(day_col, EmotionJournal.mood_type)
             .order_by(day_col)
         )
     ).all()
-    today = await db.scalar(select(func.curdate()))
-    start = today - timedelta(days=days - 1)
 
     buckets: dict[str, dict[str, int]] = {}
     for day, mood, count in rows:
@@ -94,12 +115,19 @@ async def journals_trend(db: AsyncSession, user_id: int, days: int) -> dict:
 
 
 async def journals_calendar(db: AsyncSession, user_id: int, year: int, month: int) -> dict:
-    """按天聚合某月情绪分布（数据库本地日期），返回整月逐日 + 当月汇总。"""
-    day_col = func.date(EmotionJournal.created_at).label("day")
+    """按上海自然日聚合指定月份，仅扫描该月对应的 UTC 半开区间。"""
+    _, start_at, end_at = business_month_range_utc_naive(year, month)
+    day_col = func.date(
+        func.convert_tz(EmotionJournal.created_at, "+00:00", "+08:00")
+    ).label("day")
     rows = (
         await db.execute(
             select(day_col, EmotionJournal.mood_type, func.count().label("cnt"))
-            .where(EmotionJournal.user_id == user_id)
+            .where(
+                EmotionJournal.user_id == user_id,
+                EmotionJournal.created_at >= start_at,
+                EmotionJournal.created_at < end_at,
+            )
             .group_by(day_col, EmotionJournal.mood_type)
         )
     ).all()

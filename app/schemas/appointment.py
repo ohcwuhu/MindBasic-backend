@@ -23,6 +23,7 @@ class ServiceBriefOut(ApiModel):
     id: int
     name: str
     service_type: Literal["SINGLE", "PACKAGE"]
+    duration_min: int | None = None
     price_in_cents: int
 
 

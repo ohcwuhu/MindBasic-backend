@@ -25,12 +25,15 @@ import re
 import time
 import base64
 import asyncio
+import logging
 from datetime import datetime
 
 # cv2 / numpy / DeepFace 在函数内懒加载，避免应用启动即加载 TensorFlow/torch
 
 # ─── 面部时序缓冲（供 HTTP 层 /api/analyze_audio 融合时查询）─────────
 from app.services.ai_lab import facial_buffer
+
+log = logging.getLogger("ai-lab.socket")
 
 # ─── 后台任务登记（保持强引用，避免留痕任务被 GC 回收）───────────────
 from app.core.tasks import spawn_task
@@ -546,10 +549,30 @@ def register_socket_events(sio, log):
     注册所有 SocketIO 事件处理器到主实例。
     在 main.py 中调用：register_socket_events(sio, log)
     """
-    import os as _os
-    import tempfile as _tmp
-
     from app.services.ai_lab import realtime_session as _rt
+    from app.services.ai_lab import upload_store as _upload_store
+
+    async def _remove_session_later(
+        sid: str,
+        session,
+        *,
+        delay: float = 2.0,
+    ) -> None:
+        """延迟移除指定实例；同一 sid 的新通话不会被误删。"""
+        await asyncio.sleep(delay)
+        if not _rt.has_session(sid):
+            return
+        if _rt.get_session(sid) is not session:
+            return
+        conv_id = session.conversation_id
+        _rt.remove_session(sid, expected=session)
+        if conv_id:
+            rooms = _conv_rooms.get(int(conv_id))
+            if rooms is not None:
+                rooms.discard(sid)
+                if not rooms:
+                    _conv_rooms.pop(int(conv_id), None)
+        log.info("[VC] %s | 会话实例已移除", sid)
 
     # ─── 空闲看门狗收尾：长时间无语音时由定时任务触发（见 realtime_session）───
     async def _handle_idle_timeout(sid: str, idle_seconds: int) -> None:
@@ -567,8 +590,8 @@ def register_socket_events(sio, log):
         if session is not None:
             session.state = _rt.STATE_IDLE
             session.llm_cancelled = True
+            session.closing = True
             session.audio_chunks.clear()
-            session.conversation_id = None
         clients.get(sid, {}).pop("ai_conv_id", None)
 
         await sio.emit("vc_idle_timeout", {
@@ -580,6 +603,11 @@ def register_socket_events(sio, log):
 
         if conv_id:
             await _conv.end_session_safely(conv_id, status="ABANDONED")
+        if session is not None:
+            spawn_task(
+                _remove_session_later(sid, session),
+                name=f"remove-idle-session:{sid}",
+            )
 
     _rt.set_idle_timeout_handler(_handle_idle_timeout)
 
@@ -635,7 +663,7 @@ def register_socket_events(sio, log):
         facial_buffer.remove_client(sid)
         # 清理视频通话会话
         from app.services.ai_lab import realtime_session
-        realtime_session.remove_session(sid)
+        realtime_session.remove_session(sid, expected=_session)
 
     # ─── 画面帧事件：节流 + 解码 + DeepFace + 推送结果 ─────────────
     @sio.on("upload_frame")
@@ -849,10 +877,29 @@ def register_socket_events(sio, log):
         from app.services.ai_lab import kb_cards as _kb
 
         from app.services.ai_lab import fallback_prompt as _fallback
+        from app.services.ai_lab import upload_store as _upload_store
 
         session = realtime_session.get_session(sid)
+        # 一轮开始即冻结落库目标与轮次；后续 stop/idle 可以改变实时状态，
+        # 但不能让本轮已生成的用户/助手文本失去会话关联。
+        _turn_conversation_id = session.conversation_id
+        _turn_index = session.turn_index + 1
+        _turn_chat_history = session.get_chat_history()
+        _upload_file_id = os.path.splitext(os.path.basename(audio_path))[0]
+        _upload_store.mark_active(_upload_file_id)
+        if session.closing or session.state == realtime_session.STATE_IDLE:
+            _upload_store.drop(_upload_file_id)
+            log.info("[VC] %s | 会话已结束，跳过本轮音频处理", sid)
+            return
+
+        async def _live_emit(event: str, payload=None, **kwargs) -> None:
+            """通话关闭后停止界面/语音推送，但允许后续留痕任务完成。"""
+            if session.closing or session.state == realtime_session.STATE_IDLE:
+                return
+            await sio.emit(event, payload, **kwargs)
+
         session.state = realtime_session.STATE_THINKING
-        await sio.emit("vc_state_change", {"state": "thinking"}, room=sid)
+        await _live_emit("vc_state_change", {"state": "thinking"}, room=sid)
 
         # 一轮对话的计时起点（端到端耗时以"收到音频"为基准）
         _turn_t0 = _time.time()
@@ -870,7 +917,7 @@ def register_socket_events(sio, log):
                 _api_key = _cfg.DEEPSEEK_API_KEY or ""
                 if not _api_key.strip():
                     log.error("[VC] %s | LLM API Key 未配置！请在后端 .env 中设置 DIFY_API_KEY 或 DEEPSEEK_API_KEY", sid)
-                    await sio.emit("vc_error", {
+                    await _live_emit("vc_error", {
                         "stage": "config",
                         "message": "LLM API Key 未配置，请设置 DIFY_API_KEY 或 DEEPSEEK_API_KEY"
                     }, room=sid)
@@ -955,11 +1002,11 @@ def register_socket_events(sio, log):
                 if not asr_text:
                     log.info("[VC] %s | ASR 无结果，跳过", sid)
                     session.state = realtime_session.STATE_LISTENING
-                    await sio.emit("vc_state_change", {"state": "listening"}, room=sid)
+                    await _live_emit("vc_state_change", {"state": "listening"}, room=sid)
                     return
 
                 log.info("[VC] %s | [1/5] ASR 完成: %s (emo=%s)", sid, asr_text[:80], emo)
-                await sio.emit("vc_asr_result", {
+                await _live_emit("vc_asr_result", {
                     "text": asr_text,
                     "emo": emo,
                 }, room=sid)
@@ -1069,7 +1116,7 @@ def register_socket_events(sio, log):
                              sid, _mm_elapsed, _voice_emo, _text_emo, emo)
 
                 # 推送多模态情感分析结果给前端
-                await sio.emit("vc_emotion_analysis", {
+                await _live_emit("vc_emotion_analysis", {
                     "voice_emotion": voice_result,
                     "text_emotion": text_result,
                     "facial_emotion": fusion_result.get("facial_emotion") if fusion_result else None,
@@ -1098,7 +1145,7 @@ def register_socket_events(sio, log):
                 )
 
                 if _risk.flagged:
-                    await sio.emit("vc_crisis_alert", {
+                    await _live_emit("vc_crisis_alert", {
                         "level": _risk.level,
                         "levelLabel": _risk.level_label_cn,
                         "riskScore": _risk.risk_score,
@@ -1120,9 +1167,9 @@ def register_socket_events(sio, log):
                 # ── 1.9) 五阶段状态判定（平台侧确定性引擎）─────────────
                 #   结果落库并作为入参回传给 Dify，保证"阶段口径"只有一个来源。
                 _stage_decision = _decide_stage(
-                    session.get_chat_history(),
+                    _turn_chat_history,
                     asr_text,
-                    turn_index=session.turn_index + 1,
+                    turn_index=_turn_index,
                 )
                 session.stage_context = _stage_decision.to_dict()
                 session.emotion_context["coach_stage"] = _stage_decision.stage
@@ -1153,7 +1200,7 @@ def register_socket_events(sio, log):
                         # 由 _backfill_dify_risk 在本轮结束后补写该行。
                         # 工作流确实没暴露时保持 NULL，一致性统计会跳过该行。
                         dify_risk_level=None,
-                        conversation_id=session.conversation_id,
+                        conversation_id=_turn_conversation_id,
                         timings={
                             "asr_seconds": _asr_seconds,
                             "multimodal_seconds": round(_mm_elapsed, 3),
@@ -1165,10 +1212,10 @@ def register_socket_events(sio, log):
                 # ── 1.95) 用户表达落库（先落库再生成，被打断也不丢）──────
                 #   尽力而为：写库失败只记日志，不影响用户体验。
                 spawn_task(_conversation.record_message_safely(
-                    session.conversation_id,
+                    _turn_conversation_id,
                     role="USER",
                     content=asr_text,
-                    turn_index=session.turn_index + 1,
+                    turn_index=_turn_index,
                     emotion={
                         "fusion_emotion_cn": session.emotion_context.get("fusion_emotion", ""),
                         "fusion_emotion_en": session.emotion_context.get("fusion_emotion_en", ""),
@@ -1177,7 +1224,7 @@ def register_socket_events(sio, log):
                         "risk_level": _risk.level,
                     },
                     snapshot=_conversation.TurnSnapshot(
-                        turn_index=session.turn_index + 1,
+                        turn_index=_turn_index,
                         user_text=asr_text,
                         stage=_stage_decision.stage,
                         goal_clear=_stage_decision.goal_clear,
@@ -1190,6 +1237,9 @@ def register_socket_events(sio, log):
                         fusion_confidence=session.emotion_context.get("fusion_confidence"),
                     ),
                 ), name=f"record-user:{sid}")
+                # 用户表达已经形成一轮；即使后续模型空回复或挂断，
+                # 下一轮也不应复用同一个 turn_index。
+                session.turn_index = max(session.turn_index, _turn_index)
 
                 # 【关键修正】情感分析完成后绝不因为"打断"而丢弃
                 #   打断仅影响 TTS 播放，不影响 LLM 文本生成推进
@@ -1203,7 +1253,7 @@ def register_socket_events(sio, log):
                     if vlm_result.get("description"):
                         visual_context = vlm_result["description"]
                         session.last_visual_description = visual_context
-                        await sio.emit("vc_vlm_result", {
+                        await _live_emit("vc_vlm_result", {
                             "description": visual_context,
                             "error": None,
                         }, room=sid)
@@ -1394,7 +1444,7 @@ def register_socket_events(sio, log):
 
                 # ── 4) LLM 流式输出 + TTS 联动 ─────────────────────
                 session.state = realtime_session.STATE_SPEAKING
-                await sio.emit("vc_state_change", {"state": "speaking"}, room=sid)
+                await _live_emit("vc_state_change", {"state": "speaking"}, room=sid)
                 _llm_provider = "Dify" if use_dify else "DeepSeek"
                 log.info("[VC] %s | [4/5] 开始 %s 流式请求 ...", sid, _llm_provider)
 
@@ -1578,7 +1628,7 @@ def register_socket_events(sio, log):
                     if not session.llm_cancelled:
                         tts_text = sentence_buffer.strip()
                         log.info("[VC] %s | [4/5] 尾句 TTS: %s", sid, tts_text[:40])
-                        await sio.emit("vc_tts_start", {"text": tts_text}, room=sid)
+                        await _live_emit("vc_tts_start", {"text": tts_text}, room=sid)
                         try:
                             async for audio_chunk in _tts.synthesize(
                                 tts_text, voice=_cfg.TTS_VOICE, rate=_cfg.TTS_RATE
@@ -1586,11 +1636,11 @@ def register_socket_events(sio, log):
                                 if session.llm_cancelled:
                                     break
                                 audio_b64 = _b64.b64encode(audio_chunk).decode("ascii")
-                                await sio.emit("vc_tts_chunk", {
+                                await _live_emit("vc_tts_chunk", {
                                     "data": audio_b64,
                                     "format": "mp3",
                                 }, room=sid)
-                            await sio.emit("vc_tts_done", {"text": tts_text}, room=sid)
+                            await _live_emit("vc_tts_done", {"text": tts_text}, room=sid)
                         except Exception as e:
                             log.warning("[VC] %s | TTS(尾句)失败: %s", sid, e, exc_info=True)
                     else:
@@ -1648,7 +1698,7 @@ def register_socket_events(sio, log):
                     if not _was_interrupted:
                         _detail = "；".join(_provider_errors) if _provider_errors else ""
                         log.warning("[VC] %s | LLM 返回空内容（非打断导致）！%s", sid, _detail)
-                        await sio.emit("vc_error", {
+                        await _live_emit("vc_error", {
                             "stage": "llm" if _provider_errors else "llm_empty",
                             "message": (
                                 f"AI 回复为空（{_detail}）"
@@ -1659,12 +1709,12 @@ def register_socket_events(sio, log):
                         log.info("[VC] %s | LLM 被打断时还没生成内容（正常）", sid)
                 else:
                     # 不管有没有被打断，只要生成了内容，就 emit 给前端显示
-                    await sio.emit("vc_llm_done", {"full_response": full_response}, room=sid)
+                    await _live_emit("vc_llm_done", {"full_response": full_response}, room=sid)
                     session.add_chat_message("assistant", full_response)
 
                     # ── 5) 会话留痕：补齐本轮 AI 回复与分段耗时 ──────────
                     #   尽力而为：写库失败只记日志，不影响用户体验（见 ai_conversation_service）。
-                    session.turn_index += 1
+                    session.turn_index = _turn_index
                     _stage_ctx = session.stage_context
                     _now_ts = _time.time()
                     _turn_timings: dict[str, float] = {
@@ -1683,12 +1733,12 @@ def register_socket_events(sio, log):
                             _first_tts_t - _first_token_t, 3
                         )
                     spawn_task(_conversation.record_message_safely(
-                        session.conversation_id,
+                        _turn_conversation_id,
                         role="ASSISTANT",
                         content=full_response,
-                        turn_index=session.turn_index,
+                        turn_index=_turn_index,
                         snapshot=_conversation.TurnSnapshot(
-                            turn_index=session.turn_index,
+                            turn_index=_turn_index,
                             user_text=asr_text,
                             assistant_text=full_response,
                             stage=_stage_ctx.get("stage"),
@@ -1706,7 +1756,7 @@ def register_socket_events(sio, log):
                     ), name=f"record-assistant:{sid}")
                     log.info(
                         "[VC] %s | [5/5] 会话留痕 turn=%d conversation=%s | 耗时 %s",
-                        sid, session.turn_index, session.conversation_id,
+                        sid, _turn_index, _turn_conversation_id,
                         {k: v for k, v in _turn_timings.items()},
                     )
 
@@ -1718,27 +1768,23 @@ def register_socket_events(sio, log):
 
             finally:
                 # 清理上传的音频文件（仅限 vc_uploads 目录下的）
-                try:
-                    if _VC_UPLOAD_DIR in audio_path and os.path.isfile(audio_path):
-                        os.remove(audio_path)
-                        log.info("[VC] %s | 已清理上传文件: %s", sid, audio_path)
-                except Exception as _e:
-                    log.warning("[VC] %s | 清理音频文件失败: %s", sid, _e)
+                if _upload_store.drop(_upload_file_id):
+                    log.info("[VC] %s | 已清理上传文件: %s", sid, audio_path)
 
         except Exception as e:
             log.error("[VC] %s | 管线异常: %s", sid, e, exc_info=True)
-            await sio.emit("vc_error", {
+            await _live_emit("vc_error", {
                 "stage": "pipeline",
                 "message": f"处理失败: {e}",
             }, room=sid)
         finally:
             # 如果会话已结束（用户点了结束通话），不再发 listening 覆盖 idle
-            if session.state == realtime_session.STATE_IDLE:
+            if session.state == realtime_session.STATE_IDLE or session.closing:
                 log.info("[VC] %s | 管线结束，但会话已关闭，跳过状态重置", sid)
             else:
                 # 回到监听状态
                 session.state = realtime_session.STATE_LISTENING
-                await sio.emit("vc_state_change", {"state": "listening"}, room=sid)
+                await _live_emit("vc_state_change", {"state": "listening"}, room=sid)
                 session.reset_interrupt()
                 log.info("[VC] %s | 状态重置 -> listening", sid)
 
@@ -1756,6 +1802,9 @@ def register_socket_events(sio, log):
         from app.services import ai_conversation_service as _conversation_start
 
         session = realtime_session.get_session(sid)
+        if session.closing:
+            realtime_session.remove_session(sid, expected=session)
+            session = realtime_session.get_session(sid)
         session.state = realtime_session.STATE_LISTENING
         session.touch()  # 通话开始即视为一次语音活动，空闲计时重新起算
 
@@ -1936,17 +1985,17 @@ def register_socket_events(sio, log):
             )
             log.info("[VC] %s | 视频通话结束（会话已归档 id=%s，turn=%d）",
                      sid, session.conversation_id, session.turn_index)
-            session.conversation_id = None
             clients.get(sid, {}).pop("ai_conv_id", None)
         else:
             log.info("[VC] %s | 视频通话结束（会话已清理）", sid)
         # 通知前端状态变为 idle
         await sio.emit("vc_state_change", {"state": "idle"}, room=sid)
-        # 延迟 2 秒后彻底移除会话（确保所有进行中的事件都已处理完毕）
-        await asyncio.sleep(2)
-        if realtime_session.has_session(sid):
-            realtime_session.remove_session(sid)
-            log.info("[VC] %s | 会话已彻底移除", sid)
+        session.closing = True
+        # 延迟清理只针对当前实例；若用户马上重新开始，新会话不会被旧任务删掉。
+        spawn_task(
+            _remove_session_later(sid, session),
+            name=f"remove-stopped-session:{sid}",
+        )
 
     # ─── vc_audio_chunk: 接收音频分片 ──────────────────────────
     @sio.on("vc_audio_chunk")
@@ -1970,27 +2019,14 @@ def register_socket_events(sio, log):
     # ─── vc_audio_end: 用户说完话，触发 ASR → LLM → TTS ────────
     # data 格式（新方案）: { file_id: "xxx", file_size: 12345 }
     # 音频文件已通过 HTTP POST /api/vc_audio_upload 保存到磁盘
-    _VC_UPLOAD_DIR = _os.path.join(_tmp.gettempdir(), "vc_uploads")
-
-    #: 上传接口接受的音频后缀，与 app/api/v1/ai_lab.py 的 _VC_AUDIO_SUFFIXES 保持一致
-    _VC_AUDIO_EXTS = (".webm", ".webma", ".ogg", ".mp3", ".wav", ".opus")
-
     def _drop_uploaded(file_id: str) -> None:
         """删除已上传但不会被处理的音频。
 
         音频由 HTTP 先落盘、再由 socket 事件触发处理。当事件被丢弃
         （会话不存在、音频过小等）时文件就没人清理，会在临时目录里堆积。
         """
-        if not file_id:
-            return
-        for _ext in _VC_AUDIO_EXTS:
-            _p = _os.path.join(_VC_UPLOAD_DIR, f"{file_id}{_ext}")
-            if _os.path.isfile(_p):
-                try:
-                    _os.remove(_p)
-                except OSError as _e:
-                    log.warning("[VC] 清理上传文件失败 %s：%s", _p, _e)
-                return
+        if file_id:
+            _upload_store.drop(file_id)
 
     @sio.on("vc_audio_end")
     async def handle_vc_audio_end(sid, data=None):
@@ -2019,6 +2055,8 @@ def register_socket_events(sio, log):
         session = realtime_session.get_session(sid)
         if session.state == realtime_session.STATE_IDLE:
             log.info("[VC] %s | 会话已关闭，忽略音频处理", sid)
+            if isinstance(data, dict):
+                _drop_uploaded(str(data.get("file_id") or ""))
             return
         session.touch()  # 用户说完一轮 = 语音活动，空闲计时重置
 
@@ -2043,12 +2081,8 @@ def register_socket_events(sio, log):
             return
 
         # 在上传目录中查找对应文件
-        audio_path = ""
-        for ext in (".webm", ".webma", ".ogg", ".mp3", ".wav", ".opus"):
-            candidate = _os.path.join(_VC_UPLOAD_DIR, f"{file_id}{ext}")
-            if _os.path.isfile(candidate):
-                audio_path = candidate
-                break
+        found_path = _upload_store.find_path(file_id)
+        audio_path = str(found_path) if found_path is not None else ""
 
         if not audio_path:
             log.error("[VC] %s | 找不到文件 file_id=%s", sid, file_id)
@@ -2057,9 +2091,9 @@ def register_socket_events(sio, log):
             }, room=sid)
             return
 
-        actual_size = _os.path.getsize(audio_path)
+        actual_size = os.path.getsize(audio_path)
         log.info("[VC] %s | 收到音频结束, file=%s, size=%dB (上报=%dB)",
-                 sid, _os.path.basename(audio_path), actual_size, file_size)
+                 sid, os.path.basename(audio_path), actual_size, file_size)
 
         if actual_size < 1000:
             log.warning("[VC] %s | 音频过小(%dB)，忽略", sid, actual_size)

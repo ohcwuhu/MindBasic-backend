@@ -21,3 +21,5 @@ redis>=5.0.0
 bleach>=6.0.0
 asyncmy>=0.2.9
 prometheus-client>=0.20.0
+# Windows / 精简容器中的 zoneinfo 业务时区数据
+tzdata>=2024.1

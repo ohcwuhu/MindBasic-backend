@@ -260,10 +260,18 @@ class Appointment(Base):
     status = Column(String(16), nullable=False, server_default="PENDING", comment="PENDING/CONFIRMED/COMPLETED/CANCELLED")
     cancel_reason = Column(String(255), nullable=True)
     cancel_by = Column(BIGINT(unsigned=True), nullable=True, comment="取消人(用户或教练ID)")
-    cancel_deadline_at = Column(DATETIME(fsp=3), nullable=True, comment="免费取消截止时间(本地)")
+    cancel_deadline_at = Column(DATETIME(fsp=3), nullable=True, comment="免费取消截止时间(UTC)")
     no_show_at = Column(DATETIME(fsp=3), nullable=True, comment="判定未赴约时间")
     idempotency_key = Column(String(36), nullable=True, comment="幂等键")
     completed_at = Column(DATETIME(fsp=3), nullable=True)
+    # 下单快照：回看历史预约时不能读取会被教练修改的当前服务目录/排班。
+    service_name = Column(String(64), nullable=True, comment="下单时服务名称")
+    service_type = Column(String(16), nullable=True, comment="下单时服务类型")
+    service_duration_min = Column(INTEGER(unsigned=True), nullable=True, comment="下单时服务时长")
+    service_price_in_cents = Column(INTEGER(unsigned=True), nullable=True, comment="下单时成交单价")
+    slot_date = Column(Date, nullable=True, comment="下单时服务日期")
+    slot_start_time = Column(Time, nullable=True, comment="下单时开始时间")
+    slot_end_time = Column(Time, nullable=True, comment="下单时结束时间")
     created_at = Column(DATETIME(fsp=3), nullable=False, server_default=text("CURRENT_TIMESTAMP(3)"))
     updated_at = Column(
         DATETIME(fsp=3),

@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppError
 from app.models.coach import (
+    Appointment,
     CoachAudit,
     CoachPhrase,
     CoachProfile,
@@ -18,7 +19,7 @@ from app.models.v1_1 import ClientRelation
 from app.services.notification_service import notify
 from app.schemas.coach import CoachProfileIn, CoachProfilePatchIn, ServiceIn
 from app.schemas.coach import ServicePatchIn, SlotBatchIn
-from app.utils.time import to_iso, utcnow_naive
+from app.utils.time import business_today, to_iso, utcnow_naive
 from datetime import date as date_type
 from datetime import datetime, timedelta
 
@@ -154,10 +155,10 @@ async def list_coach_slots(db: AsyncSession, coach_profile_id: int, start_date: 
 
 
 async def replace_coach_slots(db: AsyncSession, coach_profile_id: int, data: SlotBatchIn) -> list:
-    """按日期范围整体替换可管理时段：删除 AVAILABLE/OFF，保留 BOOKED。"""
+    """按日期范围替换可管理时段，同时保留历史预约引用的行。"""
     from app.models.coach import CoachSlot
 
-    today = date_type.today()
+    today = business_today()
     parsed: list[tuple[date_type, object, object]] = []
     seen: set[tuple[date_type, object]] = set()
     for slot in data.slots:
@@ -174,10 +175,24 @@ async def replace_coach_slots(db: AsyncSession, coach_profile_id: int, data: Slo
         parsed.append((d, start, end))
 
     dates = {d for d, _, _ in parsed}
-    booked = list(await db.scalars(select(CoachSlot).where(
-        CoachSlot.coach_id == coach_profile_id,
-        CoachSlot.date.in_(dates), CoachSlot.status == "BOOKED",
-    )))
+    existing = list(
+        await db.scalars(
+            select(CoachSlot)
+            .where(
+                CoachSlot.coach_id == coach_profile_id,
+                CoachSlot.date.in_(dates),
+            )
+            .with_for_update()
+        )
+    )
+    existing_by_key = {(row.date, row.start_time): row for row in existing}
+    existing_ids = [row.id for row in existing]
+    referenced_ids = set(
+        await db.scalars(
+            select(Appointment.slot_id).where(Appointment.slot_id.in_(existing_ids))
+        )
+    ) if existing_ids else set()
+    booked = [row for row in existing if row.status == "BOOKED"]
     booked_keys = {(row.date, row.start_time) for row in booked}
     for row in booked:
         for d, start, end in parsed:
@@ -190,11 +205,24 @@ async def replace_coach_slots(db: AsyncSession, coach_profile_id: int, data: Slo
                for day, other_start, other_end in intervals):
             raise AppError(409, "SLOT_CONFLICT", "时段与其他可约或已预约时段重叠")
         intervals.append((d, start, end))
-    await db.execute(CoachSlot.__table__.delete().where(
-        CoachSlot.coach_id == coach_profile_id,
-        CoachSlot.date.in_(dates), CoachSlot.status != "BOOKED",
-    ))
+
+    desired = {(d, start): (start, end) for d, start, end in parsed}
+    for row in existing:
+        if row.status == "BOOKED":
+            continue
+        key = (row.date, row.start_time)
+        if key in desired:
+            _, row.end_time = desired[key]
+            row.status = "AVAILABLE"
+        elif row.id in referenced_ids:
+            # 外键仍引用该时段：保留行与日期/起点，移出可约目录。
+            row.status = "OFF"
+        else:
+            await db.delete(row)
+
     for d, start, end in additions:
+        if (d, start) in existing_by_key:
+            continue
         db.add(CoachSlot(coach_id=coach_profile_id, date=d,
                          start_time=start, end_time=end, status="AVAILABLE"))
     await db.commit()

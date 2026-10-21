@@ -27,7 +27,7 @@ AI 实验室页面为 `/ai-chat`（豆包式对话）与 `/video-call`（AI 视�
 | 邮件 | smtplib | 邮箱验证码（登录/找回密码/绑定邮箱），465 SSL / 587 STARTTLS |
 | AI 实验室 | funasr / opensmile / deepface / torch / tensorflow | 语音转写、语调情感、表情识别、融合分析 |
 | AI 教练 | DeepSeek Chat API | 以识别结果为上下文做心理教练式引导 |
-| 测试 | pytest | 集成测试直连开发库，80 项覆盖核心链路 |
+| 测试 | pytest | 纯单元测试与显式独立测试库的集成测试分开运行 |
 
 ## 架构总览
 
@@ -96,8 +96,11 @@ python scripts/demo_seed.py
 python scripts/run_dev.py
 # 或 uvicorn app.main:socket_app --reload
 
-# 9. 跑测试
-pytest tests -q
+# 9. 跑不写业务库的单元回归
+python -m pytest --noconftest -p no:cacheprovider \
+  tests/test_llm_stream_consume.py tests/test_runtime_guards.py \
+  tests/test_idle_watchdog.py tests/test_booking_regressions_unit.py \
+  tests/test_time_contract_unit.py tests/test_upload_cleanup_unit.py -q
 ```
 
 > 初始管理员：`13800138000 / Admin@123456`（首次登录后请修改密码）。
@@ -138,7 +141,7 @@ pytest tests -q
 | `DEEPSEEK_DISABLE_REASONING` | 否 | 是否关闭推理模式（默认 `true`）。`deepseek-v4-flash` 不关会先输出推理，语音管线首 token 变慢、正文可能被挤空 |
 | `DEEPSEEK_MAX_TOKENS` | 否 | 单轮最大生成 token（默认 500）；推理与正文共享该上限 |
 | `FALLBACK_RISK_JUDGE` | 否 | 兜底轮次是否补一次同口径风险自判（默认 `true`，写入 `fallback_risk_level`） |
-| `TTS_VOICE` / `TTS_RATE` | 否 | 视频通话语音合成（edge-tts，免费）；默认 `zh-CN-XiaoxiaoNeural` / `+20%` |
+| `TTS_VOICE` / `TTS_RATE` | 否 | 视频通话语音合成（edge-tts，免费）；默认 `zh-CN-XiaoxiaoNeural` / `+0%` |
 | `VLM_API_KEY` / `VLM_BASE_URL` / `VLM_MODEL` | 否 | 视频通话视觉理解（OpenAI 兼容 Vision API）；未配置时跳过视觉理解 |
 | `CHAT_FREE_REPLY_LIMIT` | 否 | 免费沟通教练回复条数，默认 3 |
 | `PAYMENT_MODE` | 否 | `mock`（余额/模拟支付，默认）/ `disabled` |
@@ -248,7 +251,7 @@ USER 消息里用变量选择器引用它（`{{#<开始节点id>.knowledge_conte
 - **成长体系**：每日打卡、排行榜、勋章、成长测评（资源导向，不诊断）
 - **社群**：主题社群、加入/退出、帖子/评论/点赞
 - **通知**：站内消息（预约、审核、危机预警等）
-- **数据与隐私**：数据导出（JSON 保留 7 天）、注销删除（密码确认）、服务协议确认（版本留痕）
+- **数据与隐私**：数据导出（资料、全部预约/订单/钱包、日记/打卡、私信、AI 会话与消息、成长测评；JSON 保留 7 天）、注销删除（密码确认）、服务协议确认（版本留痕）
 
 ### 教练端
 
@@ -302,7 +305,7 @@ USER 消息里用变量选择器引用它（`{{#<开始节点id>.knowledge_conte
 | --- | --- |
 | 认证 | `/auth/register` `/auth/login` `/auth/email-code` `/auth/email-login` `/auth/reset-password` `/auth/refresh` `/auth/logout` |
 | 用户 | `/users/me` `/users/me/email` `/users/me/favorites` `/users/me/badges` |
-| 自助工具 | `/self-coaching/templates|records` `/emotion-journals` `/emotion-journals/trend|calendar` |
+| 自助工具 | `/self-coaching/templates|records` `/emotion-journals`（支持 `date=YYYY-MM-DD`、`/{id}`）`/emotion-journals/trend|calendar` |
 | 教练服务 | `/coaches` `/coaches/{id}/slots|reviews` `/appointments` |
 | 教练端 | `/coach/profile|services|slots|clients|appointments|cases|reviews|phrases` |
 | 科普/首页 | `/articles` `/home` `/platform/config` |
@@ -538,9 +541,29 @@ AI 心理教练对话。请求：
 
 ```bash
 cd backend
-pytest tests -q                    # 全量 180 项（其中约 100 项需要可连接的 MySQL）
-pytest tests/test_auth.py -q       # 单模块
+
+# 纯单元：不加载 conftest，不连接数据库
+python -m pytest --noconftest -p no:cacheprovider \
+  tests/test_llm_stream_consume.py tests/test_runtime_guards.py \
+  tests/test_idle_watchdog.py tests/test_booking_regressions_unit.py \
+  tests/test_time_contract_unit.py tests/test_upload_cleanup_unit.py -q
+
+# 数据库集成：必须显式指向独立测试库
+export TEST_DATABASE_URL='mysql+pymysql://root:root@127.0.0.1:3306/mindbasic_test?charset=utf8mb4'
+DATABASE_URL="$TEST_DATABASE_URL" alembic upgrade head
+TEST_DATABASE_URL="$TEST_DATABASE_URL" python -m pytest tests -q
 ```
+
+PowerShell 写法：
+
+```powershell
+$env:TEST_DATABASE_URL = "mysql+pymysql://root:root@127.0.0.1:3306/mindbasic_test?charset=utf8mb4"
+$env:DATABASE_URL = $env:TEST_DATABASE_URL
+alembic upgrade head
+python -m pytest tests -q
+```
+
+外部 AI 自检（Dify 等）依赖真实密钥与服务，不由上述测试自动执行。
 
 ### 评测（多模态融合与危机分级）
 
@@ -568,10 +591,8 @@ python experiments/run_runtime_stats.py     # 真实运行数据（成功率/降
 因此 `tests/conftest.py` 为测试进程单独构建了 `NullPool` 引擎：连接随用随开、
 在当前循环内释放，不影响应用运行时的池化配置。
 
-- 测试直连开发库，使用唯一手机号并在 teardown 清理；跑完建议清一下 `email_verification_codes` 等临时表避免冷却误伤：
-  ```sql
-  DELETE FROM email_verification_codes;
-  ```
+- `tests/conftest.py` 要求 `TEST_DATABASE_URL` 并覆盖应用连接串，缺少该变量时拒绝执行数据库测试，避免误连日常开发库；
+- 集成测试会建删账号并调用部分业务流程，只允许在独立测试库运行；
 - `conftest.py` 提供 `client` / `auth_headers` / `admin_headers` 模块级夹具；
 - 邮箱验证码测试通过打桩 `email_service.send_email` 捕获验证码，不依赖真实 SMTP；
 - AI 重型依赖（torch/tensorflow/deepface）全部懒加载，测试导入主应用不会拉起模型，退出也不会崩溃。
@@ -645,9 +666,7 @@ uvicorn app.main:socket_app --host 0.0.0.0 --port 8000 --workers 1
 - **语音转文字失败**：先看 `/api/analyze_audio/config_check` 中 `sensevoice.loaded`；
   未加载则内存不足或首次下载未完成，释放内存后调 `/api/analyze_audio/warmup`。
 - **AI 教练返回 503**：`.env` 未配置 `DEEPSEEK_API_KEY`，或 Key 失效（查看响应 detail）。
-- **时区**：应用按 UTC 存储（`utcnow_naive`），但 `created_at` 一类字段由 MySQL
-  `CURRENT_TIMESTAMP` 写入（服务器本地时间）。做时间窗口比较时与数据库时钟对齐
-  （维护任务即用 `SELECT NOW()` 作为基准），不要混用两者。
+- **时区**：应用连接统一执行 `SET time_zone = '+00:00'`，具体时刻按 naive UTC 存储并输出 `Z`；排班、打卡“今天”、日记月历等业务日期按 `Asia/Shanghai` 解释。不要直接把 UTC 的 `created_at` 取 `DATE()` 当作上海日期。
 - **AI 回复报 `[llm] Insufficient Balance`**：DeepSeek 账号余额不足，充值或更换 Key 即可，非程序问题。
 - **回复里没有卡片内容 / 知识库 0 命中**：先看启动日志有没有「卡片知识库索引已重建」，
   再确认 `knowledge_base/` 目录存在。Docker 部署要确认镜像 COPY 了 `knowledge_base/`
@@ -658,4 +677,3 @@ uvicorn app.main:socket_app --host 0.0.0.0 --port 8000 --workers 1
   已下线的整本书检索索引（含第三方出版物片段）不要恢复上传。
 - **服务进程被系统杀掉**：多为内存耗尽（模型 + 系统占用超限），关闭大内存程序或增加内存后再启动。
 - **测试退出时 torch 日志报错**：已通过懒加载修复；确认 `app.main` 导入时不应加载 torch/tensorflow。
-- **时区**：应用按 UTC 存储（`utcnow_naive`），数据库服务器时间可能为本地时间；涉及跨时区比较的新逻辑请统一使用 `utcnow_naive`。

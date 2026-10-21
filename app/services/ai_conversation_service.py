@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Iterable, Mapping
 
 from sqlalchemy import func, select, update
@@ -145,7 +144,7 @@ def normalize_consent(payload: Mapping[str, Any] | None) -> dict[str, Any]:
         "multimodal": bool(scopes.get("multimodal", False)),
         "policyVersion": str(raw.get("policyVersion") or DEFAULT_POLICY_VERSION)[:32],
         "basis": str(raw.get("basis") or "VIDEO_CALL_START")[:32],
-        "grantedAt": datetime.now().isoformat(timespec="seconds"),
+        "grantedAt": to_iso(utcnow_naive()),
     }
 
 

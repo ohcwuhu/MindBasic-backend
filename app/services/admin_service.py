@@ -1,6 +1,6 @@
 """管理后台业务逻辑。"""
 
-from datetime import datetime, time
+from datetime import date, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,7 +24,12 @@ from app.schemas.admin import (
 )
 from app.services.content_guard import check_banned_words
 from app.services.content_sanitizer import sanitize_html
-from app.utils.time import to_iso, utcnow_naive
+from app.utils.time import (
+    business_day_start_utc_naive,
+    business_today,
+    to_iso,
+    utcnow_naive,
+)
 
 
 def write_admin_log(
@@ -60,11 +65,12 @@ async def list_users(
     if status:
         stmt = stmt.where(User.status == status)
     if created_from:
-        start = datetime.combine(datetime.strptime(created_from, "%Y-%m-%d").date(), time.min)
+        start = business_day_start_utc_naive(date.fromisoformat(created_from))
         stmt = stmt.where(User.created_at >= start)
     if created_to:
-        end = datetime.combine(datetime.strptime(created_to, "%Y-%m-%d").date(), time.max)
-        stmt = stmt.where(User.created_at <= end)
+        end_day = date.fromisoformat(created_to)
+        end = business_day_start_utc_naive(date.fromordinal(end_day.toordinal() + 1))
+        stmt = stmt.where(User.created_at < end)
     total = await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = list(
         await db.scalars(
@@ -510,7 +516,7 @@ def feedback_to_out(item: EmotionFeedbackLib) -> dict:
 
 
 async def admin_stats(db: AsyncSession) -> dict:
-    today_start = datetime.combine(datetime.now().date(), time.min)
+    today_start = business_day_start_utc_naive(business_today())
     user_count = await db.scalar(select(func.count()).select_from(User).where(User.deleted_at.is_(None))) or 0
     coach_count = await db.scalar(select(func.count()).select_from(CoachProfile).where(CoachProfile.deleted_at.is_(None))) or 0
     approved_coach_count = await db.scalar(

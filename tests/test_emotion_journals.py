@@ -1,3 +1,6 @@
+from app.utils.time import business_today
+
+
 def test_create_and_list_journals(client, auth_headers):
     resp = client.post(
         "/api/v1/emotion-journals",
@@ -25,6 +28,16 @@ def test_create_and_list_journals(client, auth_headers):
     assert data["pagination"]["totalItems"] == 2
     assert data["pagination"]["hasMore"] is True
     assert data["items"][0]["id"] == second_id  # 时间倒序
+
+    detail = client.get(f"/api/v1/emotion-journals/{second_id}", headers=auth_headers)
+    assert detail.status_code == 200
+    assert detail.json()["data"]["id"] == second_id
+
+    today = business_today().isoformat()
+    dated = client.get(f"/api/v1/emotion-journals?date={today}", headers=auth_headers)
+    assert dated.status_code == 200
+    assert {item["id"] for item in dated.json()["data"]["items"]} == {first_id, second_id}
+    assert dated.json()["data"]["pagination"]["totalItems"] == 2
 
     resp = client.delete(f"/api/v1/emotion-journals/{first_id}", headers=auth_headers)
     assert resp.status_code == 204

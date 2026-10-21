@@ -1,10 +1,10 @@
 """公开教练目录：列表、详情、可预约时段。"""
 
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_async_db
@@ -14,6 +14,7 @@ from app.models.coach import CoachProfile, CoachSlot, CoachTag, Service, Tag
 from app.models.user import User
 from app.schemas.review import ReviewOut
 from app.services.review_service import coach_reviews, review_to_out
+from app.utils.time import BUSINESS_TIMEZONE, business_now, business_today
 
 router = APIRouter(prefix="/coaches", tags=["coaches"])
 
@@ -113,7 +114,7 @@ async def list_coaches(
                 select(CoachTag.coach_id).where(CoachTag.tag_id == tagId)
             )
         )
-    total = len(list(await db.scalars(stmt)))
+    total = await db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     coaches = list(
         await db.scalars(
             stmt.order_by(CoachProfile.rating.desc(), CoachProfile.id.desc())
@@ -150,7 +151,7 @@ async def coach_detail(coach_id: int, request: Request, db: AsyncSession = Depen
 @router.get("/{coach_id}/slots")
 async def coach_slots(coach_id: int, request: Request, db: AsyncSession = Depends(get_async_db)) -> dict:
     await get_approved_coach_or_404(db, coach_id)
-    start = date.today()
+    start = business_today()
     end = start + timedelta(days=14)
     slots = list(
         await db.scalars(
@@ -174,7 +175,7 @@ async def coach_slots(coach_id: int, request: Request, db: AsyncSession = Depend
             "status": s.status,
         }
         for s in slots
-        if datetime.combine(s.date, s.start_time) > datetime.now()
+        if datetime.combine(s.date, s.start_time, tzinfo=BUSINESS_TIMEZONE) > business_now()
     ]
     return ok({"items": items}, trace_id=request.state.trace_id)
 
