@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import io
 import logging
+import math
 import os
 import shutil
 import subprocess
@@ -28,7 +29,6 @@ import wave
 from typing import Any
 
 import numpy as np
-import pandas as pd
 
 _log = logging.getLogger("opensmile-service")
 
@@ -234,13 +234,14 @@ class EmotionAnalyzer:
         }
 
     @staticmethod
-    def _safe_get(row: pd.Series, key: str, default: float = 0.0) -> float:
+    def _safe_get(row: Any, key: str, default: float = 0.0) -> float:
         if key not in row.index:
             return default
-        val = row[key]
-        if pd.isna(val):
+        try:
+            value = float(row[key])
+        except (TypeError, ValueError):
             return default
-        return float(val)
+        return default if math.isnan(value) else value
 
     @staticmethod
     def _sigmoid(x: float) -> float:
@@ -443,7 +444,7 @@ def _any_audio_to_wav_pcm(audio_path: str) -> tuple[np.ndarray, int]:
                 pass
 
 
-def _flatten_features(features_df: pd.DataFrame) -> dict[str, float]:
+def _flatten_features(features_df: Any) -> dict[str, float]:
     """将 eGeMAPSv02 提取的 DataFrame flatten 为 {col: value} 字典。"""
     out: dict[str, float] = {}
     if features_df is None or features_df.empty:
@@ -525,8 +526,6 @@ def analyze(audio_path: str) -> dict[str, Any]:
 
         # 直接复用 EmotionAnalyzer 已经提取过的 DataFrame（避免重复 process_signal）
         features_df = emo_result.get("_features_df")
-        if features_df is None:
-            features_df = pd.DataFrame()
         raw_feat_flat = _flatten_features(features_df)
 
         feature_summary = emo_result.get("feature_summary", {}) or {}
