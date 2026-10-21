@@ -11,6 +11,10 @@ os.environ["SCHEDULER_ENABLED"] = "false"
 # 数据库测试必须显式指向独立测试库。缺少该变量时直接阻止运行，
 # 避免 -q / IDE 的默认 pytest 命令误连日常开发库。
 test_database_url = os.environ.get("TEST_DATABASE_URL", "").strip()
+# GitHub Actions 的 MySQL service 本身就是一次性隔离库；兼容当前线上 workflow
+# 仅提供 DATABASE_URL 的配置。本地仍只接受显式的 TEST_DATABASE_URL。
+if not test_database_url and os.environ.get("CI", "").lower() == "true":
+    test_database_url = os.environ.get("DATABASE_URL", "").strip()
 if not test_database_url:
     raise RuntimeError(
         "数据库集成测试需要 TEST_DATABASE_URL（独立测试库）。"

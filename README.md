@@ -591,7 +591,7 @@ python experiments/run_runtime_stats.py     # 真实运行数据（成功率/降
 因此 `tests/conftest.py` 为测试进程单独构建了 `NullPool` 引擎：连接随用随开、
 在当前循环内释放，不影响应用运行时的池化配置。
 
-- `tests/conftest.py` 要求 `TEST_DATABASE_URL` 并覆盖应用连接串，缺少该变量时拒绝执行数据库测试，避免误连日常开发库；
+- `tests/conftest.py` 在本地要求 `TEST_DATABASE_URL` 并覆盖应用连接串，缺少该变量时拒绝执行数据库测试，避免误连日常开发库；GitHub Actions 仅在其一次性隔离 MySQL service 中使用 `DATABASE_URL` 作为回退；
 - 集成测试会建删账号并调用部分业务流程，只允许在独立测试库运行；
 - `conftest.py` 提供 `client` / `auth_headers` / `admin_headers` 模块级夹具；
 - 邮箱验证码测试通过打桩 `email_service.send_email` 捕获验证码，不依赖真实 SMTP；
