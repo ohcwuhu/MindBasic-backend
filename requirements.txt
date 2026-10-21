@@ -16,6 +16,9 @@ python-socketio>=5.11.0
 requests>=2.31.0
 # 知识库检索（kb_cards）中文分词：实时通话的 knowledge_context 依赖它
 jieba>=0.42.1
+# 文本情感路由在 app/main.py 启动时会被导入；numpy 是其中的轻量运行依赖，
+# 不能只依赖可选 AI 环境临时提供。
+numpy>=2.0.0
 APScheduler>=3.10,<4
 redis>=5.0.0
 bleach>=6.0.0

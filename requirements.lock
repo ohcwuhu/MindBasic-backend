@@ -33,6 +33,7 @@ idna==3.18
 jieba==0.42.1
 mako==1.4.1
 markupsafe==3.0.3
+numpy==2.5.3
 prometheus-client==0.26.0
 pycparser==3.0
 pydantic==2.13.4
